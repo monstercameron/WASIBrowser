@@ -356,36 +356,50 @@ component(DashboardApp, props, DashboardAppProps) {
     TaskStats stats = TaskStore_Stats(store);
 
     eventInput(updateDraftTitle, e) {
+        logf("[dashboard] draft title -> \"%s\"", e.value);
         set(draftTitle, e.value);
     }
 
     event(cyclePriority) {
-        set(draftPriority, draftPriority >= 3 ? 1 : draftPriority + 1);
+        i32 next = draftPriority >= 3 ? 1 : draftPriority + 1;
+        logf("[dashboard] priority %d -> %d", draftPriority, next);
+        set(draftPriority, next);
     }
 
     event(addTask) {
         if (TaskStore_Add(store, draftTitle, draftPriority)) {
+            logf("[dashboard] added task #%d \"%s\" (priority %d), %d total",
+                store->nextId - 1, draftTitle, draftPriority, store->count);
             set(draftTitle, "");
             set(draftPriority, 2);
+        } else {
+            logWarnf("[dashboard] add rejected (empty title or store full)");
         }
     }
 
     event(cycleFilter) {
+        logf("[dashboard] filter %s -> %s",
+            Filter_Label(filter), Filter_Label(Filter_Next(filter)));
         set(filter, Filter_Next(filter));
     }
 
     event(clearDone) {
+        i32 before = store->count;
         TaskStore_ClearDone(store);
+        logf("[dashboard] cleared %d done task(s), %d remain",
+            before - store->count, store->count);
     }
 
     eventI32(toggleTask, taskId) {
         if (TaskStore_Toggle(store, taskId)) {
+            logf("[dashboard] toggled task #%d", taskId);
             set(lastChangedTaskId, taskId);
         }
     }
 
     eventI32(removeTask, taskId) {
         if (TaskStore_Remove(store, taskId)) {
+            logf("[dashboard] removed task #%d, %d remain", taskId, store->count);
             set(lastChangedTaskId, taskId);
         }
     }

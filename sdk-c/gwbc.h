@@ -820,6 +820,11 @@ static Node gwbc_text_i32(i32 v) {
 static i32 minI32(i32 a, i32 b) { return a < b ? a : b; }
 static i32 maxI32(i32 a, i32 b) { return a > b ? a : b; }
 static u8 strEq(const char *a, const char *b) { return gc_streq(a ? a : "", b ? b : ""); }
+/* logf: formatted line to the in-window console + system log. Put these in
+ * EVENT BODIES (run once per interaction), not component bodies (run twice). */
+#define logf(...) gwb_log(GWB_LOG_INFO, strf(__VA_ARGS__))
+#define logWarnf(...) gwb_log(GWB_LOG_WARN, strf(__VA_ARGS__))
+
 /* strf: arena-formatted string (valid through this render) — for attribute
  * values like id(strf("task-%d", t->id)). For TEXT children prefer text(). */
 static const char *strf(const char *fmt, ...) {
