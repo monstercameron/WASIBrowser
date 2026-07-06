@@ -12,4 +12,9 @@ dump logs/dash-3-open.txt
 click #cycle-filter
 click #clear-done
 dump logs/dash-4-cleared.txt
+# keyed-identity: two separate type commands must land in ONE surviving input
+click #task-title
+type "AB"
+type "CD"
+dump logs/dash-5-keyed-typing.txt
 quit

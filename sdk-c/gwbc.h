@@ -98,7 +98,7 @@ typedef struct { i32 idx; } Node;
  * Node/Children field (omitted in a Props literal) renders as nothing. */
 typedef Node Children;
 
-enum { K_EMPTY, K_ELEM, K_TEXT, K_STYLE, K_ATTR, K_HANDLER, K_GROUP, K_UTIL };
+enum { K_EMPTY, K_ELEM, K_TEXT, K_STYLE, K_ATTR, K_HANDLER, K_GROUP, K_UTIL, K_KEY };
 
 typedef struct {
     u8 kind;
@@ -107,6 +107,7 @@ typedef struct {
     u32 a;           /* tag / style-prop atom / attr atom / handler id */
     const char *s;   /* text / style value / attr value / K_UTIL css prop */
     const char *s2;  /* K_UTIL css value */
+    u64 keyv;        /* K_KEY: identity key */
     i32 first, last, next;
 } GwbcNode;
 
@@ -180,6 +181,59 @@ static void gc_set_variant(Node n, u8 variant) {
             gc_set_variant((Node){ c }, variant);
 }
 static Node gc_hover(Node n) { gc_set_variant(n, 1); return n; }
+
+/* -------------------------------------------------- keyed identity registry
+ * The minimal correctness reconciler: full replace by default, but elements
+ * carrying a key REUSE their host node across renders (moved into the new
+ * tree before the old one is cleared). Preserves the state that lives ON
+ * host nodes: input focus + caret, scroll offsets, widget state, CSS
+ * transitions. Not a diffing reconciler — attrs/classes are re-set, children
+ * of a reused node are rebuilt. Limitation: keyed nodes nested inside other
+ * keyed nodes are dropped by the parent's child-rebuild (do not nest keys).
+ */
+#define GWBC_MAX_KEYED 256
+
+typedef struct {
+    u64 key;
+    u32 guestId;
+    u8 live, seen, reused;
+} GcKeyed;
+
+static GcKeyed gc_keyed[GWBC_MAX_KEYED];
+static u32 gc_keyed_count;
+static u32 gc_reuse_count_last; /* diagnostics: nodes kept last commit */
+
+static GcKeyed *gc_keyed_find(u64 key) {
+    for (u32 i = 0; i < gc_keyed_count; i++)
+        if (gc_keyed[i].live && gc_keyed[i].key == key) return &gc_keyed[i];
+    return 0;
+}
+static void gc_keyed_register(u64 key, u32 guestId) {
+    for (u32 i = 0; i < gc_keyed_count; i++) {
+        GcKeyed *k = &gc_keyed[i];
+        if (!k->live) {
+            k->key = key; k->guestId = guestId;
+            k->live = 1; k->seen = 1; k->reused = 0;
+            return;
+        }
+    }
+    if (gc_keyed_count >= GWBC_MAX_KEYED) gwbc_panic("gwbc: keyed registry full");
+    GcKeyed *k = &gc_keyed[gc_keyed_count++];
+    k->key = key; k->guestId = guestId;
+    k->live = 1; k->seen = 1; k->reused = 0;
+}
+static u8 gc_id_was_reused(u32 guestId) {
+    for (u32 i = 0; i < gc_keyed_count; i++)
+        if (gc_keyed[i].live && gc_keyed[i].guestId == guestId && gc_keyed[i].reused)
+            return 1;
+    return 0;
+}
+
+static Node gc_key_node(u64 key) {
+    Node n = gc_alloc(K_KEY);
+    gc_nodes[n.idx].keyv = key;
+    return n;
+}
 
 static Node gwbc_element(u32 tag, const Node *items, u32 n) {
     Node el = gc_alloc(K_ELEM);
@@ -663,6 +717,7 @@ static void gc_apply(i32 idx, u32 elem, char *classbuf, u32 *classlen) {
     case K_GROUP:
         for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_apply(c, elem, classbuf, classlen);
         break;
+    case K_KEY: break; /* consumed by gc_emit's key scan */
     case K_EMPTY: break;
     default: gc_emit(idx, elem); break; /* K_ELEM, K_TEXT */
     }
@@ -681,8 +736,29 @@ static void gc_emit(i32 idx, u32 parent) {
         return;
     }
     if (n->kind != K_ELEM) return;
-    u32 id = gwb_new_id();
-    gwb_create_element(id, n->a);
+
+    /* Keyed identity: a direct K_KEY child marks this element as keyed. */
+    u64 key = 0;
+    for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) {
+        if (gc_nodes[c].kind == K_KEY) { key = gc_nodes[c].keyv; break; }
+    }
+
+    u32 id;
+    GcKeyed *slot = key ? gc_keyed_find(key) : 0;
+    if (slot) {
+        /* Reuse the surviving host node: move it into the new tree (blitz
+         * re-parents on append), rebuild its children, re-set attrs/classes.
+         * Focus/caret/scroll/widget state riding the node survives. */
+        id = slot->guestId;
+        slot->seen = 1;
+        slot->reused = 1;
+        gc_reuse_count_last++;
+        gwb_clear(id);
+    } else {
+        id = gwb_new_id();
+        gwb_create_element(id, n->a);
+        if (key) gc_keyed_register(key, id);
+    }
     char classbuf[256];
     u32 classlen = 0;
     classbuf[0] = 0;
@@ -717,11 +793,29 @@ static void gc_render_clean(void) {
     gc_arena_reset();
     gc_commit_count++;
     for (u32 i = 0; i < gc_effect_count; i++) gc_effects[i].seen = 0;
+    for (u32 i = 0; i < gc_keyed_count; i++) {
+        gc_keyed[i].seen = 0;
+        gc_keyed[i].reused = 0;
+    }
+    gc_reuse_count_last = 0;
+
     gc_committing = 1;
     Node tree = gwb__root();
     gc_committing = 0;
+
+    /* Emit into a fresh wrapper FIRST: keyed reuse moves surviving nodes out
+     * of the old tree while it is still alive. Then drop the remnants and
+     * attach the new wrapper. */
+    u32 wrap = gwb_new_id();
+    gwb_create_element(wrap, GWB_DIV);
+    gc_emit(tree.idx, wrap);
     gwb_clear(gc_container);
-    gc_emit(tree.idx, gc_container);
+    gwb_append_child(gc_container, wrap);
+
+    /* Keys not seen this commit died with the old tree. */
+    for (u32 i = 0; i < gc_keyed_count; i++)
+        if (gc_keyed[i].live && !gc_keyed[i].seen) gc_keyed[i].live = 0;
+
     if (gc_css_dirty) gc_emit_stylesheet();
 }
 
@@ -736,6 +830,14 @@ static void gc_commit_cycle(void) {
         if (!gc_state_dirtied) break;
     }
     gwb_flush(); /* ops emitted directly by effects */
+    if (gc_reuse_count_last) {
+        char buf[64];
+        char *p = gwb_append_str(buf, "gwbc: kept ");
+        p = gwb_append_u32(p, gc_reuse_count_last);
+        p = gwb_append_str(p, " keyed node(s)");
+        *p = 0;
+        gwb_log(GWB_LOG_DEBUG, buf);
+    }
 }
 
 static void gwbc_render(void) {
@@ -759,12 +861,15 @@ static void gwbc_render(void) {
 
         /* Pass 2: clean render with settled state, then effects. */
         gc_commit_cycle();
-        /* Full replace destroyed the focused input; re-focus its successor. */
+        /* Re-focus the replaced input's successor — but NOT if the node was
+         * keyed and reused: it never lost focus, and re-focusing would stomp
+         * the (now genuinely preserved) caret position. */
         if (refocus_kind == GWB_EV_INPUT) {
             for (u32 i = 0; i < gc_hn_count; i++) {
                 i32 ignored;
                 if (gc_resolve_handler(gc_hn_handler[i], &ignored) == refocus
-                    && gc_hn_kind[i] == GWB_EV_INPUT)
+                    && gc_hn_kind[i] == GWB_EV_INPUT
+                    && !gc_id_was_reused(gc_hn_node[i]))
                     gwb_focus(gc_hn_node[i]);
             }
         }
@@ -948,14 +1053,19 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
         gc_append(gc__f, (node_expr)); \
     } \
     gc__f; }))
-/* Keys are accepted (and type-checked) now, used by the future reconciler;
- * today this renders like map(). Keep keys stable and unique. */
+/* Keyed lists: each item's root element carries an identity key (the
+ * call-site line salts it, so different lists may reuse the same ids).
+ * Same key across renders => the HOST NODE is preserved (moved, not
+ * recreated): focus, caret, scroll and widget state survive. */
+#define GC_KEYSALT ((u64)(__LINE__) * 2654435761ull)
 #define mapKeyed(item, array, len, key_expr, node_expr) (__extension__({ \
     Node gc__f = gc_alloc(K_GROUP); \
     for (u32 gc__i = 0; gc__i < (u32)(len); gc__i++) { \
         __auto_type item = &(array)[gc__i]; \
-        (void)(key_expr); \
-        gc_append(gc__f, (node_expr)); \
+        Node gc__n = (node_expr); \
+        if (gc_nodes[gc__n.idx].kind == K_ELEM) \
+            gc_append(gc__n, gc_key_node(gc_deps_mix(GC_KEYSALT, (u64)(u32)(key_expr)))); \
+        gc_append(gc__f, gc__n); \
     } \
     gc__f; }))
 /* Filter + map in one: renders node_expr only for items where cond_expr
@@ -964,10 +1074,18 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
     Node gc__f = gc_alloc(K_GROUP); \
     for (u32 gc__i = 0; gc__i < (u32)(len); gc__i++) { \
         __auto_type item = &(array)[gc__i]; \
-        (void)(key_expr); \
-        if (cond_expr) gc_append(gc__f, (node_expr)); \
+        if (cond_expr) { \
+            Node gc__n = (node_expr); \
+            if (gc_nodes[gc__n.idx].kind == K_ELEM) \
+                gc_append(gc__n, gc_key_node(gc_deps_mix(GC_KEYSALT, (u64)(u32)(key_expr)))); \
+            gc_append(gc__f, gc__n); \
+        } \
     } \
     gc__f; }))
+
+/* Explicit identity for a single stateful element (inputs, scroll areas):
+ *   input(keyed("draft"), value(v), onInput(h), ...) */
+#define keyed(strKey) gc_key_node(depsStr(strKey))
 
 /* -- hooks -- */
 #define stateI32(name, initial) i32 name = gwbc_use_i32(#name, (initial))

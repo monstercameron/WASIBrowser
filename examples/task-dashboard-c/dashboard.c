@@ -164,6 +164,8 @@ component(TaskComposer, props, TaskComposerProps) {
             div(
                 class(U(Flex, Gap(2))),
                 input(
+                    keyed("draft-input"), /* host node survives re-renders:
+                                             focus + caret genuinely preserved */
                     id("task-title"),
                     type("text"),
                     value(props.draftTitle),

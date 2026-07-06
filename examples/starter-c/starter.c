@@ -84,6 +84,7 @@ component(StarterApp, props, StarterAppProps) {
             ),
 
             input(
+                keyed("name-input"),
                 id("name-input"),
                 type("text"),
                 value(name),
