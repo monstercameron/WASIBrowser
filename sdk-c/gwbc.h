@@ -754,9 +754,20 @@ static u32 gc_class_for(const char *prop, const char *val, u8 variant) {
 
 static u32 gc_style_text_node; /* text node inside the generated <style> */
 
+/* Base CSS injected ahead of the utility rules (plugins set this — e.g.
+ * gwbc-tw.h's Preflight). Scope selectors to #mount. */
+static const char *gc_base_css;
+
 static void gc_emit_stylesheet(void) {
     static char css[24 * 1024];
     u32 len = 0;
+    if (gc_base_css) {
+        const char *s = gc_base_css;
+        while (*s) {
+            if (len + 2 >= sizeof(css)) gwbc_panic("gwbc: stylesheet buffer full");
+            css[len++] = *s++;
+        }
+    }
     for (u32 i = 0; i < gc_cl_count; i++) {
         char head[32];
         char *p = gwb_append_str(head, ".u");

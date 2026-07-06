@@ -12,6 +12,7 @@
  *         -o dashboard-c.wasm dashboard.c business.c
  */
 #include "gwbc.h"
+#include "gwbc-tw.h" /* typed Tailwind utilities + Preflight base css */
 #include "business.h"
 
 /* ---------------------------------------------------------------- context */
@@ -46,7 +47,7 @@ component(AppButton, props, AppButtonProps) {
         type("button"),
         disabled(props.isDisabled),
         onClick(props.onPress),
-        class(U(RoundedXl, Px(4), Py(2), TextSm, Cursor("pointer"))),
+        class(U(RoundedXl, Px(4), Py(2), TextSm, Cursor("pointer"), TwTransition)),
         classIf(strEq(props.tone, "primary"), BgSlate900, FgWhite, Hover(BgSlate700)),
         classIf(strEq(props.tone, "danger"), BgRed600, FgWhite, Hover(BgRed700)),
         classIf(strEq(props.tone, "plain"), BgWhite, FgSlate900, BorderSlate300),
@@ -68,8 +69,8 @@ component(StatPill, props, StatPillProps) {
         span(class(U(TextXs, FgSlate500)), props.label),
         strong(
             class(U(TextLg, FontSemibold)),
-            classIf(props.warn, FgAmber500),
-            classIf(!props.warn, FgSlate900),
+            classIf(props.warn, twTextColor(TwAmber, 600)),
+            classIf(!props.warn, twTextColor(TwSlate, 900)),
             Text(props.amount)
         )
     );
@@ -123,7 +124,8 @@ typedef struct {
 
 component(Card, props, CardProps) {
     return section(
-        class(U(RoundedXl, BorderSlate200, BgWhite, Pad(5), Flex, FlexCol, Gap(4))),
+        class(U(RoundedXl, BorderSlate200, BgWhite, Pad(5), Flex, FlexCol, Gap(4),
+                twShadow(TwShadowSm))),
         props.rootExtra,
         If(props.title && props.title[0],
             h2(class(U(TextLg, FontSemibold, FgSlate900)), props.title)),
