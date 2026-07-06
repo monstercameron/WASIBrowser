@@ -23,7 +23,8 @@ speculation.
 > WEB-NAMING.md     b3/ed/@petname/name~keytag/bare/delegation/dns ramp (§1)
 > WEB-BUNDLE.md     chunking, manifests, lifecycle, retain/sunset, GC, cache (§2)
 > WEB-RPC.md        service identity, iface hashes, method calls, transport (§4)
-> WEB-SECURITY.md   hostile net/names/apps, certainty ladder, chrome, recovery (§10)
+> WEB-SECURITY.md   hostile net/names/apps, certainty ladder, chrome, recovery,
+>                   privacy model (§10 + §5's who/what split, oblivious tiers)
 > WEB-PERMISSIONS.md capability vocab, wasmtime gates, task mgr, update diffs (§11)
 > docs/WEB-VALUE.md WVEP: value exchange — WRITTEN (extracted; its own threat model)
 > WEB-SWARM.md      gateway, LAN, DHT, Wirehair/fountain, relays, privacy (§3)
@@ -1265,7 +1266,7 @@ per-app privacy profiles (§11).
   third-party scripts) and the strictest-sandbox COMPUTE worker + Value
   Session + greed ledger; then STORAGE/BANDWIDTH (reusing the P1 chunk store)
   and JUDGMENT; broker accountability + federation last. Crypto-generation
-  ships behind the §13.4 disclosure gate. *Demo: a news bundle unlocked three
+  ships behind the crypto-disclosure gate (docs/WEB-VALUE.md §13.4). *Demo: a news bundle unlocked three
   ways — pay $0.10, watch a tracked-free sponsor frame, or run 90s of
   gentle CPU compute — each producing a verifiable receipt; the ledger shows
   the real per-unlock cost; a battery laptop is offered pay/attention, not
@@ -1759,7 +1760,7 @@ independent SHIP verdicts).
 | swarm | LAN/DHT/QUIC peer distribution + Wirehair fountain symbols (§3) |
 | ValueOffer / ValueReceipt | WVEP's signed request-for-value / signed proof-of-contribution (WEB-VALUE.md) |
 | worker bundle | a `b3:` compute unit run in the strictest sandbox for a value session (WEB-VALUE.md) |
-| `host.trust_tier` | mandatory host signal: `native` (full) vs `extension` (verify + public-read only) (§0c) |
+| `host.trust_tier` | mandatory host signal: `native` (full) vs `extension` (full verification, capability-capped: public/read-mostly, no payments/private) (§0c) |
 | certainty ladder (C0–C4) | how much chrome trusts an authority: C0 hash → C4 bare name (§10.3) |
 | maturity tiers (Tier 0–3) | invariant / accelerator / social / civilizational — distinct from C0–C4 (§0b) |
 

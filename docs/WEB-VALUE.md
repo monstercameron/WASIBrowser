@@ -12,9 +12,9 @@
 
 ## WVEP — Browser-Mediated Value Exchange (Proof-of-Value)
 
-Monetization is the plan's most-cited hole (scorecard 3→5; §4a declared a
-`payments` capability but honestly called it "narrowed, not closed"). WVEP
-closes it properly by generalizing "payment" into **browser-mediated value
+Monetization is the plan's most-cited hole (scorecard 3→6; §4a's `payments`
+capability alone reached 5 — "narrowed, not closed" — and WVEP closes it
+further to 6). WVEP does this by generalizing "payment" into **browser-mediated value
 exchange**: an app may *request value*, and the browser — not the app —
 decides whether, how, and under what bounds the user contributes it, handing
 the app a signed **receipt**, never device control. §4a's `payments` is
@@ -105,7 +105,7 @@ only, one input object in → one output object out. It runs under the §11.4
 limiter + fuel/epoch budgets, shows up in the Task Manager as a live session,
 pauses on battery/thermal pressure, and is force-killable. Worker bundles are
 `b3:` objects under the §2b lifecycle (revocation lists, no silent permission
-expansion on update — §11.6 R4).
+expansion on update — §10 R4, mechanism in §11.6).
 
 ### 13.3 Cost transparency + the greed ledger
 
