@@ -1696,7 +1696,8 @@ workers, host-mediated, receipted.
 3. host shows the REAL cost of each option (§13.3)
 4. user picks a path (or the host auto-fulfills within a pre-granted limit)
 5. host runs a bounded ValueSession (metered, killable) via an accepted broker
-6. broker/provider signs a ValueReceipt over the ACTUAL metered cost
+6. broker/provider signs a ValueReceipt over the metered cost (cpu/wall
+   fuel-attestable; energy only an estimate — see below)
 7. app verifies receipt sig + offer-hash and unlocks — it never sees the
    user's identity or device, only the receipt
 ```
