@@ -83,6 +83,69 @@ db). Everything ever fetched is a seedable cache entry. Apps relaunch from
 the store with **zero network** and, with the wasmtime compile cache keyed
 by the same hash, near-zero start latency (goal #5: relaunch = mmap).
 
+## 2b. Versioning, freshness, and natural decay
+
+Content addressing makes bytes immortal; that is a feature for survival and
+a bug for hygiene. The swarm must not become a hoard of every version ever
+published, and a *running* app must be able to learn it is stale. Both are
+solved by making lifecycle a **first-class, signed part of the manifest**,
+and by treating deletion as a *hint the network naturally respects*, never a
+capability (you cannot force strangers to delete; you can make keeping the
+old thing pointless).
+
+**The manifest carries lifecycle, not just a pointer:**
+
+```
+manifest: { seq, bundle: b3:...,  prev: b3:...,
+            retain: N,            keep this + N-1 predecessors seedable
+            stale_after: dur,     clients past this SHOULD recheck before run
+            sunset: bool,         end-of-life: archive, stop auto-seeding
+            data_ttl: dur,        default freshness for the app's cached data
+            sig }
+```
+
+**Outdated signalling (app side).** Every bundle launched via `ed:` (and
+`b3:` bundles that embed their publisher key) gets a standard host check:
+on launch (and periodically, rate-limited) the host re-resolves the
+manifest; if `seq` moved, the guest receives a **`BUNDLE_OUTDATED` event
+(kind 42, payload = new seq + severity)** — surfaced in gwbc as
+`onUpdateAvailable(h)`. Severity comes from the publisher: *newer-exists*
+(FYI), *stale* (past `stale_after` — nag), *sunset* (this app line is dead —
+the chrome shows an archived banner and the store stops seeding it by
+default). The app decides what to do; the platform only guarantees the
+signal exists, is authentic (signed), and is uniform across every app —
+that uniformity is what lets the ecosystem purge.
+
+**Natural purge (network side).** Store/seeder GC policy reads the same
+records: versions inside the `retain` window are seedable; superseded
+versions outside it decay to LRU cache (kept while cheap, evicted first,
+never re-announced to the DHT); `sunset` lines stop being announced at all.
+Because chunks are shared across versions, "purging v1" physically means
+dropping only the chunks v-current doesn't reference — decay is incremental
+and mostly free. Archives (institutions that deliberately pin history) are
+the *opt-in exception*, not the default behavior — history survives because
+someone chose to keep it, not because nobody could delete it.
+
+**The zombie-data problem (named honestly).** A bundle that outlives its
+backend is a zombie: immortal UI, dead RPC. This is only partially
+solvable, and the plan says so. What the platform does:
+
+1. **Design pressure toward data-as-atoms**: anything a service returns
+   that is not per-user can be a signed `b3:` object (with `data_ttl`) —
+   such data outlives the service in caches/archives exactly like code, and
+   the app degrades to read-only instead of dead.
+2. **Service succession**: service manifests (same `ed:` machinery) can
+   name a successor key/endpoint — a backend can hand over without the app
+   updating. A missing manifest past its TTL = the standard "service is
+   gone" signal, delivered to the app as an RPC error class, not a timeout
+   guess.
+3. **Final snapshots**: a publisher sunsetting a service can publish a
+   last read-only data bundle referenced from the sunset manifest — the
+   "everlasting wasm + everlasting final dataset" ending, instead of a
+   zombie.
+Per-user live data whose operator vanished is declared out of scope: no
+protocol resurrects a dead database, and pretending otherwise is web3-brain.
+
 ## 3. Distribution: swarm + fountain, gateway as training wheels
 
 Three ways to get chunks, tried concurrently, all verifiable, all filling
@@ -211,8 +274,13 @@ docs/
 6. **Dynamic content**: content addressing loves static bundles; live data
    goes over RPC. Is the split clean enough? (Feeds = RPC + signed inline
    objects that are themselves `b3:` addressable, so even dynamic content
-   degrades into cacheable atoms.)
-7. **Spec-first discipline**: 4 spec docs before serious code. Agreed?
+   degrades into cacheable atoms; §2b's zombie-data section is the honest
+   boundary of what survives a dead operator.)
+7. **Purge is advisory** (§2b): retain/sunset/TTL are signed hints that
+   default-configured clients respect; a hostile pinner can keep anything
+   forever (as on today's web — right-click-save exists). Is hint+default
+   enough, or does anything here need to be harder?
+8. **Spec-first discipline**: 4 spec docs before serious code. Agreed?
 
 ## 8. Phases (each lands a demo in this repo)
 
@@ -223,9 +291,12 @@ docs/
   verification + offline relaunch from the store + compile cache.
   *Demo: task-dashboard-c loads from `wnx://b3:...`, then loads again with
   the network cable pulled.*
-- **P2 — publisher identity.** `ed:` manifests, `wnx publish`, update flow
-  with delta fetch (only changed chunks move). *Demo: v2 of the dashboard
-  ships by moving <10% of its bytes.*
+- **P2 — publisher identity + lifecycle.** `ed:` manifests with the §2b
+  lifecycle fields, `wnx publish`, update flow with delta fetch (only
+  changed chunks move), BUNDLE_OUTDATED event + gwbc `onUpdateAvailable`,
+  store GC honoring retain/sunset. *Demo: v2 of the dashboard ships by
+  moving <10% of its bytes; the still-running v1 shows an update banner
+  within a minute; `wnx publish --sunset` makes the store stop seeding it.*
 - **P3 — RPC v1.** Host import + RPC_RESULT events + gwbc `useRpc` hook;
   rpc-over-HTTPS binding; a demo service (the todos backend) with a signed
   key, reached by pubkey. *Demo: RemoteTodos card, but the endpoint moves
