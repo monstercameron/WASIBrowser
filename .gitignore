@@ -7,6 +7,9 @@ target/
 !cmd/run/app.wasm
 *.wasm.d
 
+# App-scoped signing key seed (secret, per-machine)
+.gwb-app-key.bin
+
 # Native build artifacts
 *.exe
 *.dll

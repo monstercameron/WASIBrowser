@@ -19,6 +19,29 @@ use crate::ui::{ConsoleMsg, Source};
 
 pub const ABI_MAJOR: u32 = 1;
 
+/// Load the persisted app-scoped ed25519 key (32-byte seed) or create one.
+/// Local-dev stand-in for the §1 per-app derived identity — a stable key so the
+/// server sees a consistent caller. Returns (signing key, base64 pubkey).
+fn load_or_create_app_key() -> (Arc<ed25519_dalek::SigningKey>, String) {
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+    let path = std::path::Path::new(".gwb-app-key.bin");
+    let seed: [u8; 32] = match std::fs::read(path) {
+        Ok(b) if b.len() == 32 => b.try_into().unwrap(),
+        _ => {
+            use rand::RngCore;
+            let mut s = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut s);
+            let _ = std::fs::write(path, s);
+            crate::logger::log("rpc", "generated app-scoped key (.gwb-app-key.bin)");
+            s
+        }
+    };
+    let key = SigningKey::from_bytes(&seed);
+    let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
+    (Arc::new(key), pub_b64)
+}
+
 pub mod ev {
     pub const NET_RESULT: u16 = 40;
     /// Host-mediated RPC completion, correlated by req_id. See docs/04-WEB-RPC.md.
@@ -144,9 +167,13 @@ pub struct Shared {
     /// its `service` field here; an unknown name is a capability violation.
     pub services: HashMap<String, ServiceEntry>,
     pub next_rpc_id: u32,
-    /// Current user session token (set by an auth.login RPC result; attached to
-    /// calls whose flags request it). Phase 2.
+    /// Current user session token (set by the guest via `session_set` after an
+    /// auth.login; attached to calls whose flags request it). §3 of 04-WEB-RPC.
     pub session_token: Option<String>,
+    /// App-scoped ed25519 signing key (§1/§3): signs every RPC request.
+    pub app_key: Arc<ed25519_dalek::SigningKey>,
+    /// base64 of the app verifying (public) key — the GWB-App-Key header.
+    pub app_key_b64: String,
 }
 
 /// Well-known atoms 0..1024 (spec appendix; mirrored in sdk/gwb).
@@ -493,6 +520,7 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         ServiceEntry { endpoint: dev_endpoint.clone(), iface: "gwb.echo.v1".to_string(), server_key: String::new() },
     );
 
+    let (app_key, app_key_b64) = load_or_create_app_key();
     let shared = Arc::new(Mutex::new(Shared {
         atoms: well_known_atoms(),
         batches: Vec::new(),
@@ -503,6 +531,8 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         services,
         next_rpc_id: 0,
         session_token: None,
+        app_key,
+        app_key_b64,
     }));
 
     let mut linker: Linker<HostState> = Linker::new(&engine);
@@ -666,7 +696,7 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
             let payload = buf[mstart + method_len..].to_vec();
             let want_session = flags & 0b10 != 0;
 
-            let (req_id, entry, session) = {
+            let (req_id, entry, session, app_key, app_key_b64) = {
                 let mut g = caller.data().shared.lock().unwrap();
                 // Capability check: the app may call only manifest-declared
                 // services. An unknown name never reaches the network.
@@ -680,7 +710,7 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
                 g.next_rpc_id += 1;
                 let id = g.next_rpc_id;
                 let session = if want_session { g.session_token.clone() } else { None };
-                (id, entry, session)
+                (id, entry, session, g.app_key.clone(), g.app_key_b64.clone())
             };
 
             let url = format!("{}/rpc/{}/{}", entry.endpoint.trim_end_matches('/'), iface, method);
@@ -692,14 +722,29 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
             std::thread::Builder::new()
                 .name(format!("rpc-{req_id}"))
                 .spawn(move || {
+                    use base64::Engine as _;
+                    use ed25519_dalek::Signer as _;
+                    use sha2::{Digest as _, Sha256};
                     let started = Instant::now();
-                    // Phase 1: transport only. Phase 2 adds GWB-App-Key/GWB-Sig/
-                    // GWB-Ts channel signing here (ed25519 over canonical bytes).
+                    // Channel authn (§2): sign canonical bytes with the app key.
+                    // canonical = iface\nmethod\nreq_id\nts\nhex(sha256(body)).
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                        .to_string();
+                    let body_hash = hex::encode(Sha256::digest(&payload));
+                    let canonical = format!("{iface}\n{method}\n{req_id}\n{ts}\n{body_hash}");
+                    let sig = app_key.sign(canonical.as_bytes());
+                    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
                     let mut req = ureq::post(&url)
                         .timeout(std::time::Duration::from_secs(15))
                         .set("Content-Type", "application/json")
                         .set("GWB-Req-Id", &req_id.to_string())
-                        .set("GWB-Iface", &iface);
+                        .set("GWB-Iface", &iface)
+                        .set("GWB-App-Key", &app_key_b64)
+                        .set("GWB-Sig", &sig_b64)
+                        .set("GWB-Ts", &ts);
                     if let Some(tok) = &session {
                         req = req.set("GWB-Session", tok);
                     }
@@ -744,6 +789,28 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
             req_id
         },
     )?;
+
+    // Session slot (§3): the guest, after an auth.login RPC, hands the host the
+    // token string; the host attaches it (GWB-Session) to calls that request it
+    // via the GWB_RPC_F_SESSION flag. Keeps the host out of body-parsing.
+    linker.func_wrap(
+        "gwb",
+        "session_set",
+        |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| {
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return };
+            let data = mem.data(&caller);
+            let (p, l) = (ptr as usize, len as usize);
+            if p + l > data.len() {
+                return;
+            }
+            let tok = String::from_utf8_lossy(&data[p..p + l]).into_owned();
+            crate::logger::log("rpc", &format!("session_set ({} bytes)", tok.len()));
+            caller.data().shared.lock().unwrap().session_token = Some(tok);
+        },
+    )?;
+    linker.func_wrap("gwb", "session_clear", |caller: Caller<'_, HostState>| {
+        caller.data().shared.lock().unwrap().session_token = None;
+    })?;
 
     linker.func_wrap("gwb", "request_frame", |caller: Caller<'_, HostState>| {
         // Just mark the request. GwbApplication::about_to_wait pumps pending

@@ -7,12 +7,14 @@
 //	  body:    request payload (JSON)
 //	  reply:   JSON body + HTTP status (4xx/5xx map to err_class host-side)
 //
-// Dispatch is a method table (iface -> method -> handler), the RPC-first shape:
-// the server's API *is* its method table. Authn (ed25519 channel sig) and authz
-// (per-method guard) are layered in Phase 2; Phase 1 is the transport + echo.
+// Dispatch is a method table (iface -> method -> route). Each route declares an
+// authz role; the request first passes L1 channel authn (ed25519 signature),
+// then the per-method guard, then the handler. The server's API *is* its method
+// table — the RPC-first shape (§4).
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"flag"
 	"io"
@@ -22,30 +24,29 @@ import (
 	"time"
 )
 
-// rpcCtx carries one call's decoded request to a handler.
+// rpcCtx carries one decoded call to a handler.
 type rpcCtx struct {
 	Iface   string
 	Method  string
 	ReqID   string
-	AppKey  string          // GWB-App-Key (channel identity; verified in Phase 2)
-	Session string          // GWB-Session (user principal; Phase 2)
-	Body    []byte          // raw request payload
-	r       *http.Request   // underlying request (rarely needed)
+	AppKey  string
+	Session string
+	Body    []byte
+	prin    principal // filled by dispatch after authn
+	r       *http.Request
 }
 
-// bind decodes the JSON body into v. Returns an rpcError on malformed input.
 func (c *rpcCtx) bind(v any) *rpcError {
 	if len(c.Body) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(c.Body, v); err != nil {
-		return &rpcError{Status: http.StatusBadRequest, Msg: "bad json: " + err.Error()}
+		return errBadRequest("bad json: " + err.Error())
 	}
 	return nil
 }
 
-// rpcError is a handler failure that maps to an HTTP status (and, host-side, an
-// err_class). See docs/04-WEB-RPC.md §1.
+// rpcError maps to an HTTP status (and, host-side, an err_class). §1.
 type rpcError struct {
 	Status int
 	Msg    string
@@ -58,50 +59,79 @@ func errForbidden(msg string) *rpcError    { return &rpcError{http.StatusForbidd
 func errNotFound(msg string) *rpcError     { return &rpcError{http.StatusNotFound, msg} }
 func errBadRequest(msg string) *rpcError   { return &rpcError{http.StatusBadRequest, msg} }
 
-// handler is one RPC method. It returns a JSON-serializable reply or an error.
 type handler func(c *rpcCtx) (any, *rpcError)
 
-// server holds the method table and (Phase 2) the signing key + user store.
-type server struct {
-	methods map[string]map[string]handler // iface -> method -> handler
+// route is a method plus its required authz role.
+type route struct {
+	role string // "public" | "user" | "admin"
+	fn   handler
 }
 
-func newServer() *server {
-	s := &server{methods: map[string]map[string]handler{}}
-	s.register("gwb.echo.v1", "echo", s.echo)
+type server struct {
+	methods map[string]map[string]route
+	store   *store
+	auth    *authConfig
+}
+
+func newServer(requireChannel bool) *server {
+	pub, priv, _ := ed25519.GenerateKey(nil) // server session-signing key
+	s := &server{
+		methods: map[string]map[string]route{},
+		store:   newStore(),
+		auth:    &authConfig{serverPriv: priv, serverPub: pub, requireChannel: requireChannel},
+	}
+	s.routes()
 	return s
 }
 
-func (s *server) register(iface, method string, h handler) {
+func (s *server) register(iface, method, role string, h handler) {
 	if s.methods[iface] == nil {
-		s.methods[iface] = map[string]handler{}
+		s.methods[iface] = map[string]route{}
 	}
-	s.methods[iface][method] = h
+	s.methods[iface][method] = route{role: role, fn: h}
 }
 
-// echo is the Phase 1 smoke handler: it reflects the request so the whole
-// rpc_call -> host -> server -> RPC_RESULT loop is provable end to end.
+// routes is the full storefront method table with per-method authz (§6 of 04-WEB-RPC).
+func (s *server) routes() {
+	s.register("gwb.echo.v1", "echo", "public", s.echo)
+
+	s.register("shop.auth.v1", "login", "public", s.login)
+	s.register("shop.auth.v1", "logout", "public", s.logout)
+	s.register("shop.auth.v1", "me", "user", s.me)
+
+	s.register("shop.catalog.v1", "list", "public", s.catalogList)
+	s.register("shop.catalog.v1", "get", "public", s.catalogGet)
+	s.register("shop.catalog.v1", "categories", "public", s.catalogCategories)
+
+	s.register("shop.cart.v1", "get", "user", s.cartGet)
+	s.register("shop.cart.v1", "add", "user", s.cartAdd)
+	s.register("shop.cart.v1", "setQty", "user", s.cartSetQty)
+	s.register("shop.cart.v1", "remove", "user", s.cartRemove)
+
+	s.register("shop.orders.v1", "place", "user", s.ordersPlace)
+	s.register("shop.orders.v1", "mine", "user", s.ordersMine)
+
+	s.register("shop.admin.v1", "upsertProduct", "admin", s.adminUpsert)
+	s.register("shop.admin.v1", "deleteProduct", "admin", s.adminDelete)
+	s.register("shop.admin.v1", "orders", "admin", s.adminOrders)
+}
+
 func (s *server) echo(c *rpcCtx) (any, *rpcError) {
 	var payload any
-	_ = json.Unmarshal(c.Body, &payload) // best-effort; echo raw if not JSON
+	_ = json.Unmarshal(c.Body, &payload)
 	return map[string]any{
-		"iface":   c.Iface,
-		"method":  c.Method,
-		"reqId":   c.ReqID,
-		"appKey":  c.AppKey,
-		"gotBody": payload,
-		"ts":      time.Now().UnixMilli(),
+		"iface": c.Iface, "method": c.Method, "reqId": c.ReqID,
+		"appKey": c.AppKey, "gotBody": payload, "ts": nowMs(),
 	}, nil
 }
 
-// ServeHTTP routes POST /rpc/{iface}/{method} to the method table.
+// ServeHTTP: parse -> L1 authn -> per-method authz -> handler.
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	if r.Method != http.MethodPost {
 		writeErr(w, &rpcError{http.StatusMethodNotAllowed, "rpc is POST-only"})
 		return
 	}
-	// path: /rpc/{iface}/{method}
 	rest, ok := strings.CutPrefix(r.URL.Path, "/rpc/")
 	if !ok {
 		writeErr(w, errNotFound("not an /rpc/ path"))
@@ -112,15 +142,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errNotFound("expected /rpc/{iface}/{method}"))
 		return
 	}
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MiB cap
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	c := &rpcCtx{
-		Iface:   iface,
-		Method:  method,
+		Iface: iface, Method: method,
 		ReqID:   r.Header.Get("GWB-Req-Id"),
 		AppKey:  r.Header.Get("GWB-App-Key"),
 		Session: r.Header.Get("GWB-Session"),
-		Body:    body,
-		r:       r,
+		Body:    body, r: r,
 	}
 
 	methods, ok := s.methods[iface]
@@ -128,20 +156,42 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errNotFound("unknown iface: "+iface))
 		return
 	}
-	h, ok := methods[method]
+	rt, ok := methods[method]
 	if !ok {
 		writeErr(w, errNotFound("unknown method: "+iface+"."+method))
 		return
 	}
 
-	reply, rerr := h(c)
+	// L1 channel authn + L2 session -> principal.
+	prin, aerr := s.auth.resolvePrincipal(c)
+	if aerr != nil {
+		logCall(iface, method, c.ReqID, aerr, start)
+		writeErr(w, aerr)
+		return
+	}
+	c.prin = prin
+	// Per-method authz guard.
+	if gerr := requireRole(rt.role, prin); gerr != nil {
+		logCall(iface, method, c.ReqID, gerr, start)
+		writeErr(w, gerr)
+		return
+	}
+
+	reply, rerr := rt.fn(c)
+	logCall(iface, method, c.ReqID, rerr, start)
 	if rerr != nil {
-		log.Printf("rpc %s.%s req=%s -> ERR %d %s (%s)", iface, method, c.ReqID, rerr.Status, rerr.Msg, time.Since(start))
 		writeErr(w, rerr)
 		return
 	}
-	log.Printf("rpc %s.%s req=%s -> OK (%s)", iface, method, c.ReqID, time.Since(start))
 	writeJSON(w, http.StatusOK, reply)
+}
+
+func logCall(iface, method, reqID string, e *rpcError, start time.Time) {
+	if e != nil {
+		log.Printf("rpc %s.%s req=%s -> ERR %d %s (%s)", iface, method, reqID, e.Status, e.Msg, time.Since(start))
+		return
+	}
+	log.Printf("rpc %s.%s req=%s -> OK (%s)", iface, method, reqID, time.Since(start))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -156,20 +206,17 @@ func writeErr(w http.ResponseWriter, e *rpcError) {
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8787", "listen address")
+	insecure := flag.Bool("dev-insecure", false, "skip L1 channel signature verification (curl testing)")
 	flag.Parse()
 
-	s := newServer()
+	s := newServer(!*insecure)
 	mux := http.NewServeMux()
 	mux.Handle("/rpc/", s)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
-	log.Printf("storefront RPC server listening on http://%s", *addr)
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	log.Printf("storefront RPC server on http://%s (channel-auth required: %v)", *addr, !*insecure)
+	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }

@@ -76,6 +76,8 @@ GWB_IMPORT("log") extern void gwb_imp_log(u32 level, const u8 *ptr, u32 len);
 GWB_IMPORT("request_frame") extern void gwb_imp_request_frame(void);
 GWB_IMPORT("fetch") extern u32 gwb_imp_fetch(const u8 *ptr, u32 len);
 GWB_IMPORT("rpc_call") extern u32 gwb_imp_rpc_call(const u8 *ptr, u32 len);
+GWB_IMPORT("session_set") extern void gwb_imp_session_set(const u8 *ptr, u32 len);
+GWB_IMPORT("session_clear") extern void gwb_imp_session_clear(void);
 
 #define GWB_EXPORT(name) __attribute__((export_name(name)))
 
@@ -129,6 +131,13 @@ static u32 gwb_rpc_call(const char *service, const char *iface,
     for (u32 i = 0; i < pl; i++) b[o++] = (u8)payload[i];
     return gwb_imp_rpc_call(b, o);
 }
+
+/* Stash the user session token (from an auth.login reply) in the host's session
+ * slot; future gwb_rpc_call()s with GWB_RPC_F_SESSION attach it. See §3. */
+static void gwb_session_set(const char *token) {
+    gwb_imp_session_set((const u8 *)token, gwb_strlen(token));
+}
+static void gwb_session_clear(void) { gwb_imp_session_clear(); }
 
 /* ---- event region ---- */
 #ifndef GWB_EVENT_BUF_SIZE
