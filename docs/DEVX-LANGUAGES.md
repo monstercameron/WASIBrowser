@@ -2,13 +2,29 @@
 
 Research write-up, 2026-07-06. Based on building the identical Todo app
 (`examples/TODO_SPEC.md`) three times against the same LL ABI: Go (`sdk/gwb`),
-Rust (`sdk-rust`), freestanding C (`sdk-c/gwb.h`). Raw numbers in
-`DEVX-RESULTS.md`. Every claim below was observed in this repo, not assumed.
+Rust (`sdk-rust`), freestanding C (`sdk-c/gwb.h`). All three verified live in
+the renderer: identical DOM, identical styles, identical behavior — and
+**identical wire traffic** (byte-for-byte same batch sizes for every
+interaction). The ABI is language-neutral in practice, not just on paper.
+Every claim below was observed in this repo, not assumed.
 
 The two audiences are deliberately separated: what makes a language pleasant
 for a **human** (ergonomics, mental load, ecosystem) is not what makes it
 productive for an **agent** (feedback-loop quality, failure legibility,
 one-shot correctness, token cost). They overlap less than you'd think.
+
+## Measured
+
+| | Go | Rust | C (freestanding) |
+|---|---|---|---|
+| wasm size | **2,680 KB** | **98 KB** | **16 KB** |
+| app LOC (non-blank) | 162 | 191 | 174 |
+| binding LOC | 358 | 240 | 202 |
+| `+100` guest encode | 0.34 ms | 0.10 ms | n/a (no clock) |
+| `+100` wire | 1601 ops / 32,056 B | identical | identical |
+| host decode+apply (+100) | ~1 ms | ~1 ms | ~1 ms |
+| toggle / delete / add | 3 op / 2 op / 18 op | identical | identical |
+| build | `GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared` | `cargo build --target wasm32-wasip1 --release` | `clang --target=wasm32-unknown-unknown -O2 -nostdlib -fno-builtin -Wl,--no-entry -Wl,--export-memory` |
 
 ---
 
@@ -119,6 +135,19 @@ one-shot correctness, token cost). They overlap less than you'd think.
   Rust simply don't have.
 
 ---
+
+## Findings against the platform
+
+- Blitz alpha.6 **text input works end-to-end**: focus by click, keystrokes,
+  per-keystroke `input` events with the control value, value-clear via
+  `SetAttr(value, "")`.
+- Found+fixed under stress: applying guest batches **mid-event-dispatch**
+  crashed blitz-dom (`node.rs:1119`) when a `Remove` invalidated the driver's
+  chain. Apply is now strictly post-dispatch, as the ABI spec always said.
+  The crash logger black-boxed it perfectly.
+- 100-component mount = 1 crossing, 32 KB, ~1 ms end-to-end on the X2. The
+  same operation through the JS DOM is 700+ calls; this is the M5 benchmark's
+  opening argument.
 
 ## Recommendations
 
