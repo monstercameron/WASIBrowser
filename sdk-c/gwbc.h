@@ -15,7 +15,8 @@
  *
  * Layer 2 — ergonomic authoring aliases (lowercase; components PascalCase):
  *   component(Name, props, PropsType) { ... return view(...); }
- *   child(Component, { .field = v, ... })  /  app(Root, { ... })
+ *   Comp(P_(CompProps, .field = v, ...))    direct component calls (no child())
+ *   app(Root, { ... })                      exports
  *   div/p/h1/button/input/span/...          variadic tags; bare strings become text
  *   props(...) / class(...) / css(...)      grouping (pure splats, zero runtime)
  *   text("Count: %d", count)                reactive text (mini printf: %s %d %%)
@@ -589,10 +590,13 @@ static void gwbc_boot(void) {
 
 #define component(Name, props, PropsType) static Node Name(PropsType props)
 #define component0(Name) static Node Name(void)
-/* child(CounterPanel, { .name = name, .count = count }) — the braces' commas
- * split into varargs and __VA_ARGS__ reassembles the compound literal. */
-#define child(Component, ...) Component(((Component##Props)__VA_ARGS__))
-#define child0(Component) Component()
+
+/* Components are plain functions returning Node — call them directly, like
+ * the Go package. Props/P_ are just compound-literal conveniences:
+ *   CounterPanel(P_(CounterPanelProps, .name = name, .count = count))
+ */
+#define Props(Type, ...) ((Type){ __VA_ARGS__ })
+#define P_(Type, ...) ((Type){ __VA_ARGS__ })
 
 /* -- conditionals (Go-mirror capitals; C keywords own the lowercase) -- */
 #define If(cond, node) ((cond) ? (node) : Empty())

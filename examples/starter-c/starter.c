@@ -103,12 +103,12 @@ component(StarterApp, props, StarterAppProps) {
                 )
             ),
 
-            child(CounterPanel, {
+            CounterPanel(P_(CounterPanelProps,
                 .name = name,
                 .count = count,
                 .previous_count = previous_label,
                 .on_increment = increment,
-            }),
+            )),
 
             p(
                 props(class(U(TextXs, FgSlate500))),
