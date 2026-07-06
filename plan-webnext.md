@@ -16,24 +16,19 @@ speculation.
 > RPC, security, permissions, value exchange, swarm, migration) that one file
 > is the wrong container. **§0 is the sendable one-pager**; the glossary and a
 > canonical-schema index are at the end (§14–§15); WVEP already lives in its
-> own doc. The normative specs are the **P0 spec family** (§8):
->
-> ```
-> plan-webnext.md   this — overview, North Star, tiers, phases, adoption (INDEX)
-> WEB-NAMING.md     b3/ed/@petname/name~keytag/bare/delegation/dns ramp (§1)
-> WEB-BUNDLE.md     chunking, manifests, lifecycle, retain/sunset, GC, cache (§2)
-> WEB-RPC.md        service identity, iface hashes, method calls, transport (§4)
-> WEB-SECURITY.md   hostile net/names/apps, certainty ladder, chrome, recovery,
->                   privacy model (§10 + §5's who/what split, oblivious tiers)
-> WEB-PERMISSIONS.md capability vocab, wasmtime gates, task mgr, update diffs (§11)
-> docs/WEB-VALUE.md WVEP: value exchange — WRITTEN (extracted; its own threat model)
-> WEB-SWARM.md      gateway, LAN, DHT, Wirehair/fountain, relays, privacy (§3)
-> WEB-MIGRATION.md  extension mode, legacy dns surface, static shim, onboarding (§0c)
-> ```
+> own doc. The normative specs are the **P0 spec family** — the canonical
+> layout, tracker, and status live in **`docs/README.md`** (single source of
+> truth; §20 mirrors it). In brief: `docs/NN-WEB-*.md`, twelve specs
+> (00-OVERVIEW … 12-WEB-DATA), all under `docs/`, numerically prefixed.
+> `docs/WEB-VALUE.md` (08) is written; `docs/01-WEB-SECURITY.md` is a stub; the
+> rest are P0 extraction targets. **§5's content splits at extraction:**
+> identity-unlinkability → `01-WEB-SECURITY`, oblivious-fetch/relay tiers →
+> `07-WEB-SWARM`.
 >
 > Until P0 splits them out, the §-numbered sections below ARE those specs in
-> draft; each maps to a file above. (Section numbering is kept stable across
-> the 8 review rounds that reference it; the split is P0 work, not a renumber.)
+> draft; each maps to a `docs/` file per `docs/README.md`. (Section numbering
+> is kept stable across the 8 review rounds that reference it; the split is P0
+> work, not a renumber.)
 
 ## 0. North Star
 
@@ -892,12 +887,15 @@ So the honest position, sharpened:
   it as plainly as any permission:
 
   ```
-  data_durability := no-export            operator-dependent, dies with them
-                   | manual-export        you can pull a signed b3: snapshot
-                   | continuous-export    local mirror kept current, always yours
-                   | user-owned-storage   data lives in YOUR storage, app is a lens
-                   | replicated-service   multi-operator / successor-keyed (§2b.2)
+  data_durability := no-durable-data     D0 — app keeps no user state
+                   | local-only          D1 — user state never leaves the device
+                   | no-export           D2 — operator-dependent, dies with them
+                   | manual-export       D3 — pull a signed b3: snapshot on demand
+                   | continuous-export   D4 — local mirror kept current, always yours
+                   | user-owned-storage  D5 — data lives in YOUR storage, app is a lens
+                   | replicated-service  D6 — multi-operator / successor-keyed (§2b.2)
   ```
+  (Maps 1:1 onto the §18 D-ladder D0–D6.)
 
   Chrome shows it as a durability badge — *"Your data: continuously mirrored"*
   vs *"Operator-dependent · no export"* — so a user chooses a SaaS app knowing
@@ -1158,9 +1156,9 @@ renderer/
   src/taskmgr.rs    Store::limiter + fuel/epoch budgets -> health states,
                     the Task Manager (§11.4)
   src/update.rs     4-axis update diff + Auto-safe/Ask/Block + rollback (§11.6)
-docs/
-  WEB-SECURITY.md  WEB-NAMING.md  WEB-BUNDLE.md  WEB-SWARM.md  WEB-RPC.md
-  WEB-PERMISSIONS.md (§11 capability vocab + update UX)   (specs first)
+docs/                the P0 spec family — canonical layout + status in
+                     docs/README.md (00-OVERVIEW … 12-WEB-DATA; 08-WEB-VALUE
+                     written, 01-WEB-SECURITY stubbed, rest P0 extraction)
 ```
 
 The division of labor is the whole design: **Wasmtime** = memory isolation,
@@ -1789,7 +1787,7 @@ independent SHIP verdicts).
 | ValueOffer / ValueReceipt | WVEP's signed request-for-value / signed proof-of-contribution (WEB-VALUE.md) |
 | worker bundle | a `b3:` compute unit run in the strictest sandbox for a value session (WEB-VALUE.md) |
 | `host.trust_tier` | mandatory host signal: `native` (full) vs `extension` (full verification, capability-capped: public/read-mostly, no payments/private) (§0c) |
-| certainty ladder (C0–C4) | how much chrome trusts an authority: C0 hash → C4 bare name (§10.3) |
+| certainty ladder (C0–C5) | how much chrome trusts an authority: C0 hash → C4 bare name → C5 `dns:` legacy surface (§10.3, §18) |
 | maturity tiers (Tier 0–3) | invariant / accelerator / social / civilizational — distinct from C0–C4 (§0b) |
 
 ## 15. Canonical object schemas (index — full definitions are P0 spec-family work)
