@@ -1,5 +1,5 @@
 # WebNext — the overview & manifesto (for WASIBrowser)
-### Plan draft 11 — SHIP + accept/beat pass (personas, dev-ergonomics-proven, C-ladder chips, attack-success UX gate, privacy tests). §0-§21.
+### Plan draft 12 — naming substrate authored (docs/02-WEB-NAMING.md) + operational layer mapped (§22, docs/OPERATIONAL-LAYER.md). §0-§22.
 
 *(Naming: **WebNext** is the product/protocol; **"next.0"** is the protocol
 generation, not the label. WASIBrowser is the reference runtime.)*
@@ -439,6 +439,13 @@ human — they are Tier-0 UX, not polish:
 > §10.7 needs it.
 
 ## 1b. Human names without registrars  *(Tier 2 — social; designed now, lands at scale)*
+
+> **The full social-name mechanism — claim logs, quorum confirmation, keytag
+> assignment, resolver-node federation, attestations, resolver policy, disputes,
+> and the resolution algorithm — is authored in `docs/02-WEB-NAMING.md`.** This
+> section is the overview; that doc is the substrate (CT-style logs + untrusted
+> resolver nodes), with its `confidence`/`basis` fields mapped onto the C0–C5
+> ladder (§10.3, §18) so there is one trust vocabulary, not two.
 
 Key scarcity is solved (2^252 Ed25519 keys — "domain capacity" is unlimited
 at the identity layer). The remaining scarce thing is *short memorable
@@ -2003,6 +2010,7 @@ docs/
   00-WEBNEXT-OVERVIEW.md   (this file's role: constitution, tiers, roadmap, glossary)
   01-WEB-SECURITY.md       adversary matrix, C-ladder, trusted chrome, must-never list
   02-WEB-NAMING.md         b3/ed/@petname/name~keytag/bare/delegation/dns ramp
+                           (social-resolution + resolver-node half WRITTEN)
   03-WEB-BUNDLE.md         bundle format, chunks, manifests, lifecycle, cache, GC, compiled
   04-WEB-RPC.md            service identity, interface schema, wire, RPC events, canonical ifaces
   05-WEB-PERMISSIONS.md    capability vocab, wasmtime gates, task manager, safe mode
@@ -2013,14 +2021,20 @@ docs/
   10-WEB-UX.md             identity chrome, first-contact ceremony, prompts, value UI
   11-WEB-PACKAGES.md       deps as ed:/b3: refs (§17.2)
   12-WEB-DATA.md           D-ladder durability model + export ABI (§18)
+  OPERATIONAL-LAYER.md     Tier-2 scaffold: governance/abuse/conformance/market/
+                           enterprise/profiles/sync/… (13-28, P1-P3; see §22)
   GLOSSARY.md   SCHEMAS/ (CDDL)   TEST-VECTORS/   THREAT-MODELS/   EXAMPLES/
 ```
 
 **Canonical schemas** (deterministic CBOR + CDDL, in `SCHEMAS/`): BundleManifest,
 PublisherManifest, ServiceManifest, InterfaceSchema, CapabilityManifest,
 NameClaim, DelegationRecord, DefaultsManifest, ValueOffer, ValueReceipt,
-RecoveryRecord, UpdateDiff. Once these exist, drift stops and implementation
-becomes concrete. (Field-level shapes indexed in §15; normative CDDL is P0.)
+RecoveryRecord, UpdateDiff — **plus the naming substrate objects** (TopLabelClaim,
+ClaimInclusionProof, QuorumClaim, KeytagAssignment, NameAttestation,
+ResolverPolicy, AliasBinding, DisputeRecord, ClaimRenewal, ClaimSuccession,
+ResolverHead; see `docs/02-WEB-NAMING.md` §2). Once these exist, drift stops and
+implementation becomes concrete. (Field-level shapes indexed in §15; normative
+CDDL is P0.)
 
 ## 21. Adopters, ergonomics, and UX acceptance (the not-yet-formalized wedge)
 
@@ -2137,3 +2151,50 @@ name-claim UI ships, so the "equitable for all" claim isn't Latin-only.
 ```
 These join the §19 contracts; the privacy model (§5, §11.8) is not "done"
 until each is demonstrated.
+
+## 22. The operational & ecosystem layer (protocol → durable platform)
+
+Everything above §21 is the **protocol** — naming, bundles, RPC, security,
+permissions, updates, swarm, value, data. A protocol is necessary but not
+sufficient: what makes it *survivable in the real world* is the operational,
+legal, and ecosystem layer around it. That layer is **mostly undesigned**, and
+this section names the gap honestly rather than letting it hide behind an
+elegant core. The full scaffold is `docs/OPERATIONAL-LAYER.md`; each dimension
+graduates to its own numbered doc (`13-`…`28-`) when it earns normative content.
+
+**The one invariant that governs all of them:**
+
+> The protocol preserves addressability. Policy controls presentation, warning,
+> and execution permission.
+
+Governance, moderation, compliance, abuse-response, enterprise controls — all
+are *policy*. None may erase `ed:`/`b3:`/`name~keytag` access at the protocol
+layer; they may demote, warn, gate a capability, or refuse to *present*. This is
+the naming-dispute rule (§1c, `02-WEB-NAMING.md` §7) and censorship resistance
+(§6) generalized to the whole operational surface — the line between "a platform
+that can say no" and "a platform that can disappear you."
+
+**The missing pillars (priority order; `OPERATIONAL-LAYER.md` for each):**
+
+```
+P0  UX-VALIDATION   the identity-UX study (§21.5) — can FALSIFY the naming bet
+P0  CONFORMANCE     test vectors + "compatible implementation" definitions
+P1  GOVERNANCE      who updates defaults/logs/attestors; how they fail; forks
+P1  ABUSE           detect→classify→warn→demote→block→dispute→appeal
+P1  PROFILES        master/device/recovery keys + multi-device sync
+P1  ABI-EVOLUTION   negotiation/deprecation so early mistakes don't fossilize
+P2  ENTERPRISE      managed policy — a strong adoption wedge
+P2  MARKET/ENERGY   WVEP market rules + energy ledger (extend §13)
+P2  COMPLIANCE/MODERATION  law + harmful-content, via the invariant above
+P2  CATALOG/SYNC/OBSERVABILITY/BUSINESS-RECIPES
+P2.5 I18N-A11Y     locale keytags + accessible identity chrome (merges §21.6)
+```
+
+Already core, not re-authored: **data durability** (§2b/§18, `12-WEB-DATA.md`)
+and **supply chain** (§17.2, `11-WEB-PACKAGES.md`). **Market/energy** partly live
+in WVEP (`docs/WEB-VALUE.md`) already.
+
+**Reality-anchor:** listing these does not mean they are solved — the opposite.
+This section is the *map of what is not yet handled*, kept in the open so the
+gap between "reviewed protocol" and "durable platform" can't be papered over.
+The core earned its SHIP; this layer is P1–P3 authoring that hasn't started.
