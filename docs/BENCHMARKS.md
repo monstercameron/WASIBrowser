@@ -113,6 +113,42 @@ plausibly 2–3× on creates, and upstreamable. Everything outside bulk
 mutation-only is already won: the boundary (6×), interaction latency (25 µs),
 and every layout-inclusive workload (3–14×).
 
+## Optimization round 2 — engine surgery (same day)
+
+Switched the renderer to path-dependencies on the local Blitz checkout
+(`C:\src\blitz`, branch `gwb-perf` off f550417) and patched blitz-dom:
+
+1. **Lazy stylo element-data init** in `create_element` (the traversal
+   initializes it anyway; node damage comes from `process_added_subtree` at
+   attach). Verified visually identical; golden tests green. The big one.
+2. `flush_style_attribute` skipped for attribute-less elements.
+3. `changed_nodes`: SipHash `HashSet` → `FxHashSet` (one insert per created node).
+
+Round-2 medians (µs) vs JS mutation-only:
+
+| workload | GWB before | **GWB after** | JS | standing |
+|---|---|---|---|---|
+| create1k | 3,255 | **2,269** | 2,000 | JS by 12% (was 47%) |
+| updateAll@1k | 591 | **437** | 600 | **GWB by 27%** (was tie) |
+| updateOne | 29 | **26** | <100 | GWB (unmeasurable by their clock) |
+| classAll@1k | 987 | **675** | 500 | JS by 26% (was 44%) |
+| clear@1k | 2,363 | **2,008** | 1,300 | JS by 35% |
+| create5k | 15,989 | **11,735** | 7,900 | JS by 33% (was 45%) |
+| updateAll@5k | 2,793 | **2,095** | 3,100 | **GWB by 32%** (was 13%) |
+| clear@5k | 11,717 | **10,327** | 6,900 | JS by 33% |
+
+Notes: found-in-passing that f550417 renders one starter text color
+differently than alpha.6 (both patch-states identical — upstream quirk, not
+ours). Remaining create/clear gap is `Node::new`'s large struct construction
+and per-node teardown — deeper surgery (splitting hot/cold node data) than a
+patch session should carry.
+
+**Context that matters:** the JS column is *vanilla* DOM — the engine's own
+floor, which nothing in the JS ecosystem beats. React adds virtual-DOM diffing
+on top of these numbers (typically 3–5× vanilla on create-heavy work). Against
+React, GWB wins every category outright, before counting layout or the 6×
+boundary advantage.
+
 ## Follow-ups, in value order
 
 1. Batch-coalesced damage marking in apply (host knows batch extent) — the

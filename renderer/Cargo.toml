@@ -8,12 +8,13 @@ anyhow = "1.0.103"
 wasmtime = "46.0.1"
 wasmtime-wasi = "46.0.1"
 
-# Blitz engine — pinned to the same release the local reference checkout
-# (C:\src\blitz @ f550417) belongs to.
-blitz-dom = "=0.3.0-alpha.6"
-blitz-html = "=0.3.0-alpha.6"
-blitz-shell = "=0.3.0-alpha.6"
-blitz-traits = "=0.3.0-alpha.6"
+# Blitz engine — PATH DEPS on the local checkout (C:\src\blitz, branch
+# gwb-perf off f550417) so we can carry performance patches.
+# Was crates.io =0.3.0-alpha.6.
+blitz-dom = { path = "C:/src/blitz/packages/blitz-dom" }
+blitz-html = { path = "C:/src/blitz/packages/blitz-html" }
+blitz-shell = { path = "C:/src/blitz/packages/blitz-shell" }
+blitz-traits = { path = "C:/src/blitz/packages/blitz-traits" }
 anyrender_vello = "0.12"
 winit = "=0.31.0-beta.2"
 
