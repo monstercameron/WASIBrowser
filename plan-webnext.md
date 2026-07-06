@@ -1,5 +1,5 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 4 — for critique, not yet pinned
+### Plan draft 5 — for critique, not yet pinned
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
@@ -77,6 +77,7 @@ it," "who can open my link," and "what happens to my existing app":
 **Hello world in five minutes** (the whole loop, no ceremony):
 
 ```
+$ web keygen                 # once: writes ~/.web/id.ed25519 (your publisher key)
 $ web new hello              # scaffold: hello/app.c + manifest.toml
 $ cd hello && edit app.c     # a gwbc component; no JS, no build config
 $ web pack .                 # -> hello.webbundle  (content-addressed, b3:…)
@@ -96,22 +97,34 @@ by its `b3:` hash. Nothing here claims the identity loop works before P2.
 starts at zero reach; pretending otherwise is how "better webs" die. Two
 concrete on-ramps instead of "install our browser or leave":
 
-1. **Embeddable engine + extension — with an explicit, reduced trust
-   ceiling.** next.0 execution ships as a spec + a small reference engine that
-   plugs into existing browsers as a WASM module / extension, so
-   Chrome/Firefox/Safari users can open `web://` links *without switching
-   browsers*. **But an extension cannot draw genuine OS/browser-native chrome
-   (§10.6),** so this mode is deliberately **reduced-trust**: it renders and
-   verifies content and uses the host browser's own trusted surfaces
-   (extension action popup, `chrome.identity`-class prompts) for the identity
-   chip and permission dialogs — a persistent, non-dismissable, host-drawn
-   badge, never a content-drawn overlay a hostile page could clickjack. And
-   it is capped: **security-sensitive capabilities — payments (§4a), private
-   profiles, any C0/C1 assurance claim — require the native WASIBrowser
-   install**; the extension is view-and-verify for low-stakes content, not a
-   full-trust host. This trade is stated, not smuggled: extension mode buys
-   reach at a documented assurance ceiling, and §10.6's "trusted chrome is
-   sacred" is honored by *degrading the trust claim*, never by faking chrome.
+1. **Embeddable engine + extension — full verification, capped capabilities.**
+   next.0 execution ships as a spec + a small reference engine that plugs into
+   existing browsers as a WASM module / extension, so Chrome/Firefox/Safari
+   users can open `web://` links *without switching browsers*. **Verification
+   is identical to native: the extension performs the same `b3:`/`ed:` hash
+   and signature checks — C0/C1 are pure cryptographic facts and do not get
+   "less true" because the UI is a popup.** What the extension cannot do is
+   draw genuine OS/browser-native chrome (§10.6), so what's capped is **which
+   manifest capabilities may EXECUTE, never whether verification happened**:
+   security-sensitive capabilities — payments (§4a), identity-sharing, private
+   profiles — require the native WASIBrowser install, because their prompts
+   demand trusted chrome the extension can only approximate. For everything
+   else, the extension uses the host browser's own trusted surfaces (action
+   popup, `chrome.identity`-class prompts) for a persistent, non-dismissable,
+   host-drawn identity badge — never a content-drawn overlay a hostile page
+   could clickjack. So: same verification, same C0–C4 ladder shown honestly,
+   fewer capabilities executable — §10.6's "trusted chrome is sacred" is
+   honored by *withholding capabilities that need it*, never by faking it.
+   **Tradeoff a commercial dev must plan for:** since payments are
+   native-only, a monetized app's extension-mode experience is necessarily
+   read/preview-only — the extension buys reach for the *free* funnel, the
+   native install unlocks the *paid* one (stated so no one is surprised after
+   building; see §4a).
+   *Host-detection for graceful degradation:* the host exposes a read-only
+   `host.trust_tier` (native | extension) so an app can adapt its own UI —
+   hide the pay button and show "open in WASIBrowser to purchase" under the
+   extension, rather than letting a native-only capability silently fail. The
+   two-tier experience is a first-class, detectable state, not a surprise.
 2. **Honest v1 scoping.** Until native reach exists, v1 explicitly targets the
    audiences where "you need the runtime" is already acceptable: internal
    tools, LAN/classroom/offline deployments, developer tooling, and
@@ -123,10 +136,19 @@ No JS → no automatic React/Vue/Svelte port; that is a real cliff (scorecard:
 authoring floor 7→5, tooling 8→3). The graded on-ramp:
 
 - **Greenfield** apps are written directly against the gwbc/Go/Rust SDKs.
-- **Legacy apps stay reachable** via the `dns:` ramp (§1a) — an existing
-  `https://x.com` app keeps working, addressable from inside next.0, while a
-  next.0 front end is built incrementally against it over RPC (§4).
-- **A compatibility shim, scoped honestly by app kind.** A genuinely *static*
+- **Legacy apps stay reachable via `dns:` — as the OLD web, clearly demoted,
+  NOT ported.** Opening `dns:x.com` (§1a) launches the existing site in a
+  demoted, explicitly-labeled **legacy browsing surface**: its own JS,
+  cookies, and CA-TLS apply and it runs exactly as it does in Chrome today —
+  with **zero** next.0 properties (no verification, no offline, no permanence,
+  no capability sandbox). This is the honest escape hatch, equivalent to
+  clicking an external link; the Tier-0 "no cookies, ever" invariant governs
+  *next.0 apps*, and this surface is explicitly *not* one — it is the old web,
+  reachable but quarantined behind a legacy-web label so a user always knows
+  which world they're in. It is a *reachability* ramp, not a migration.
+- **A compatibility shim — a SEPARATE, narrower mechanism** (do not conflate
+  with the `dns:` surface above): it repackages a site's *assets* as a
+  verified next.0 bundle. A genuinely *static*
   site shims cleanly — full functionality, plus the permanence + offline wins,
   no rewrite. An *SPA* shims only its static shell: packaging preserves the
   markup/media bytes (so they're content-addressed, offline-cacheable, and
@@ -261,11 +283,21 @@ naming system that fails the billboard/phone-call test loses to `x.com` no
 matter how good its cryptography is. Five hard rules make the addresses
 human — they are Tier-0 UX, not polish:
 
-1. **No raw hash or pubkey is ever the primary user-facing string.** Every
-   manifest MUST carry `title` + `publisher` labels; chrome always renders
-   `Title · publisher · short-tag`, with the full hash reachable only behind
-   copy-link / QR. Even an anonymous `b3:` bundle shows `Untitled ·
-   b3:blue-otter-cedar…` (word-prefix + copy), never 64 raw hex.
+1. **No raw hash or pubkey is ever the primary user-facing string — but the
+   keytag is never optional.** Every manifest MUST carry `title` + `publisher`
+   labels; chrome renders `Title · publisher · short-tag`, full hash behind
+   copy-link / QR. **Labels are free text and therefore NOT trusted:** a
+   phishing bundle can self-declare `title: "Bank of America"`. Two defenses
+   make that inert. (a) The `~keytag` is *unavoidable*, always shown adjacent
+   to the label, never suppressible — the label is a hint, the tag is the
+   truth. (b) The **first time** a `publisher` label is seen bound to a *new*
+   key, chrome visibly demotes/flags it ("new publisher — not one you've
+   trusted"), rather than rendering it neutrally beside a familiar-looking
+   name; a label only earns un-flagged chrome once its key is pinned
+   (petname/history). So "Bank of America · <unknown tag> · NEW" reads as
+   suspicious, not legitimate — the population §10.7 worries about sees the
+   flag, not just the name. Even an anonymous `b3:` bundle shows `Untitled ·
+   b3:blue-otter-cedar…`, never 64 raw hex.
 2. **Keytags are word-encoded, not hex.** A keytag is drawn from a fixed
    2048-word dictionary (BIP39-style: short, unambiguous, autocorrect-able,
    no homographs), ~11 bits per word. The **minimum is 3 words / ~33 bits**
@@ -279,9 +311,14 @@ human — they are Tier-0 UX, not polish:
    *claimed*, not merely when it's shown: **the first key to claim a given
    `name~tag` at a given length owns that short form permanently; any later
    claim whose tag would collide is rejected at registration and must take a
-   longer tag.** So an already-printed `cam~blue-otter-cedar` can never be
-   silently stolen or shadowed by a newcomer — the short form is a
-   first-claim, checked against the log quorum, not a hope. (This closes the
+   longer tag.** So an already-printed `cam~blue-otter-cedar` can't be
+   silently shadowed by a newcomer — the short form is a first-claim resolved
+   by the log quorum. (One honest caveat: the quorum is federated and
+   asynchronous, so two concurrent claims for the same short tag hitting
+   *different* logs before cross-sign can both look briefly valid; the tie
+   breaks deterministically at quorum, and the loser is auto-bumped to a
+   longer tag — a brief pre-quorum ambiguity window, not indefinite. Chrome
+   shows a tag as "confirmed" only post-quorum.) (This closes the
    draft-2 contradiction where a fixed 4-hex/16-bit tag both claimed
    "infinite anchors" *and* fell to a birthday collision and to
    prefix-grinding.)
@@ -369,14 +406,22 @@ web://cam/todos/today          if cam's manifest is a DIRECTORY (below),
                                "todos" selects the app, rest is its route
 ```
 
-- **No TLDs — and legacy TLDs are reserved.** TLDs exist to shard registry
-  databases; delegation (§1d) shards by key instead, so `.com` dies with the
-  registrar. A bare top label (`google`) is a §1b claim; a dotted path
-  (`google.deepmind`) is a delegation chain (§1d); a dotted string ending in
-  a legacy TLD routes to `dns:` (§1a rule 5). **Claim validation rejects any
-  top-label string in the legacy-TLD reserved set** (`com`/`org`/`net`/`io`/…)
-  — so no native chain can ever shadow a legacy domain, and native/legacy
-  collision is impossible *by construction*, not by resolution order.
+- **No TLDs — and both legacy TLDs and keytag-shaped strings are reserved.**
+  TLDs exist to shard registry databases; delegation (§1d) shards by key
+  instead, so `.com` dies with the registrar. A bare top label (`google`) is
+  a §1b claim; a dotted path (`google.deepmind`) is a delegation chain (§1d);
+  a dotted string ending in a legacy TLD routes to `dns:` (§1a rule 5).
+  **Claim validation rejects two reserved string-classes at claim time:**
+  (a) any top-label in the legacy-TLD reserved set (`com`/`org`/`net`/`io`/…)
+  — so no native chain can shadow a legacy domain; and (b) **any string
+  matching the keytag word-pattern** (hyphen-joined dictionary words, e.g.
+  `blue-otter-cedar`) — so nobody can register a bare name that is visually
+  identical to someone's `~keytag` minus the tilde. Without (b), a
+  dropped-tilde or chat-app-mangled link (`cam~blue-otter-cedar` →
+  `cam blue-otter-cedar` → a claimed bare `blue-otter-cedar`) would land on a
+  hostile squat instead of erroring — a confusable class the old hex tags
+  couldn't have (nobody types hex as a name), closed the same way TLDs are.
+  Native/legacy *and* name/keytag collisions are impossible by construction.
 - **One claim, many apps.** A name binds to one key; that key's manifest
   declares `kind: app` **or** `kind: directory`. A directory is a signed map
   of sub-apps (`todos -> b3:…, blog -> b3:…`) selected by the first path
@@ -476,14 +521,19 @@ web://os/tetris           that governs how names WITHIN it are allocated
   petname adoption, not by an exclusive grant — and if it doesn't, `nyc~<city
   key>` still works for everyone who trusts that key.
 
-**The defaults bundle — one concrete mechanism for the FOUR kingmakers.**
+**The defaults — four INDEPENDENTLY-forkable sub-objects, not one bundle.**
 Soft resolution needs *some* shipped defaults: the trust-ranking, the
-commons-namespace set, the R7 high-risk category list (§10.2), **and the
-legacy-TLD reserved/ramp table (§1a rule 5)**. Instead of four hidden vendor
-lists, all four live in a single **signed, versioned defaults bundle** —
-itself a `web://` `ed:` object, updated and forkable exactly like an app
-(§11.6). Its initial content is published *with the spec*, and the default
-trust-ranking is a documented, criticizable function, not a black box:
+commons-namespace set, the R7 high-risk category list (§10.2), and the
+legacy-TLD reserved/ramp table (§1a rule 5). Consolidating them into one
+object would concentrate risk — a single bad actor or coerced publisher would
+miscalibrate all four at once, and a community disputing *one* would have to
+fork *all*. So instead: a top-level **defaults manifest** references four
+**independently-versioned, independently-forkable `ed:` sub-objects**, each
+with its own signer. A community can adopt someone else's trust-ranking while
+keeping the spec's TLD table, or fork only the R7 list — mix and match, no
+monolith. Each sub-object's initial content is published *with the spec*, and
+the default trust-ranking is a documented, criticizable function, not a black
+box:
 
 ```
 default_rank(claim) = w1·petname_import_frequency   (how many books pin it)
@@ -492,16 +542,27 @@ default_rank(claim) = w1·petname_import_frequency   (how many books pin it)
                     − w4·look_alike_penalty         (confusable to a pinned name)
 ```
 
-Any user or community swaps the bundle in one action; a browser fork ships
-its own. The residual soft power of "the default most people never change" is
-real and stated (§7.1) — but a specified, auditable, forkable default beats
-an unspecified one, and this is as concrete as the app-update path it reuses.
+The **legacy-TLD sub-object mirrors IANA's root zone + pending-delegation
+set** on a defined cadence (tracking *applied-for* gTLDs, not just live ones,
+so the reservation leads go-live and closes the race window). Retroactive
+reservation **grandfathers** any prior native claim — safe because dns-routing
+keys on a string's *final* label while native claim-blocking keys on its *top*
+label: a grandfathered native top-label `zip` only affects `zip.*` native
+addresses, never `*.zip` legacy ones, so it can't shadow the eventual gTLD.
+Any user or community swaps any sub-object in one action; a fork ships its own.
+Residual soft power of "the default most never change" is real and stated
+(§7.1) — but four specified, auditable, independently-forkable defaults beat
+one unspecified monolith.
 
 **Equity is not automatic — the honest open issues:**
 
-- *Script equity.* ASCII-only v1 privileges Latin scripts. Full IDN with
-  confusable-folding is a v-next *requirement*, not a nicety, or the
-  "equitable for all participants" claim is hollow for most of the planet.
+- *Script equity.* ASCII-only v1 privileges Latin scripts — and this extends
+  to the keytag layer too: the BIP39-style word dictionary (§1a) is
+  implicitly English/Latin, so word-tags are less speakable/memorable for
+  non-English users, not just bare names. Per-locale keytag dictionaries +
+  full IDN with confusable-folding are a v-next *requirement*, not a nicety,
+  or the "equitable for all participants" claim is hollow for most of the
+  planet.
 - *Compute equity.* Anti-sybil PoW (§1b) taxes the resource-poor if it's
   heavy. It must stay cheap + one-time, or move to rate-limits / verifiable
   delay functions (wall-clock, not hashpower) so a phone can claim a name
@@ -1265,6 +1326,18 @@ C4  bare name          ambiguous discovery        NOT TRUSTED — search-like
 disambiguation: `"google": multiple identities found — choose one` with the
 newly-seen and look-alike claims flagged. Bare names are search queries, not
 destinations.
+
+**Reconciling the sales examples with the security model (read this before
+§9).** Pretty dotted/bare addresses used to sell the ergonomics
+(`google.deepmind.chat`, `nyc/hall`, Flow 2's `google.search`) render at
+**full confidence only once their top label is pinned** via petname/history;
+on genuine *first contact* they are C4 — a chooser/search, not a smooth "just
+works" destination. Flow 2 looks seamless because it assumes `google` is
+already pinned (the common steady-state); the honest first-run of any of them
+is the disambiguation above. This is not a contradiction between the marketing
+and the model — it's the same "discovery is social, execution is verified"
+split (§0): the *first* visit is discovery (C4, you choose and pin), every
+visit *after* is execution (C2, verified against your pin).
 
 ### 10.4 Adversary sweep — mitigation → honest verdict
 

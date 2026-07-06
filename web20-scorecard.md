@@ -270,7 +270,7 @@ open/unsolved (plan flags it) · **[R]** regression vs web · **[—]** unaddres
 |---|---|---|---|
 | UI capability / richness | 9 | **7** | [X][R] Blitz is capable but years behind Blink (forms/IME/CSS/media gaps) |
 | Consistency / predictability | 4 | **6** | [S][—] uniform trust chrome; app-level dark patterns remain |
-| Trust legibility | 3 | **7** | [S][O] identity chip + certainty ladder — gated on the unsolved "keys must become human" (§10.7) |
+| Trust legibility | 3 | **7 → 3 (unverified)** | [S][O] identity chip + certainty ladder — but the §10.7 usability study hasn't run and label-phishing surfaces keep appearing; the 7 is a design *ceiling*, the defensible score today is 3–4 |
 | Cross-app interoperability | 3 | **7** | [S] capability RPC + shared identity substrate |
 | Durability of artifacts | 4 | **9** | [S] content-addressed immutable bundles + frozen ABI run unchanged for decades |
 
