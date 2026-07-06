@@ -306,6 +306,75 @@ component(TaskList, props, TaskListProps) {
     ));
 }
 
+/* ------------------------------------------------------------ remote data */
+
+/* Demo-grade JSON scraping: pull "title" values out of the jsonplaceholder
+ * todos payload. A real app would ship a proper parser as business code. */
+static char remoteTitles[8][96];
+static i32 remoteTitleCount;
+
+static void parseRemoteTitles(const char *json) {
+    remoteTitleCount = 0;
+    const char *p = json;
+    while (remoteTitleCount < 8) {
+        const char *needle = "\"title\": \"";
+        const char *hit = 0;
+        for (const char *s = p; *s; s++) {
+            const char *a = s, *b = needle;
+            while (*a && *b && *a == *b) { a++; b++; }
+            if (!*b) { hit = a; break; }
+        }
+        if (!hit) break;
+        i32 n = 0;
+        while (hit[n] && hit[n] != '"' && n < 95) {
+            remoteTitles[remoteTitleCount][n] = hit[n];
+            n++;
+        }
+        remoteTitles[remoteTitleCount][n] = 0;
+        remoteTitleCount++;
+        p = hit + n;
+    }
+}
+
+component0(RemoteTodos) {
+    QueryResult q = useQuery("remote-todos",
+        "https://jsonplaceholder.typicode.com/todos?_limit=5");
+
+    event(refetchRemote) {
+        logf("[dashboard] refetching remote todos");
+        refetchQuery("remote-todos");
+    }
+
+    if (q.ok) parseRemoteTitles(q.data);
+
+    return Card(Props(CardProps,
+        .title = "Remote todos (useQuery)",
+        .children = Children(
+            IfElse(q.loading,
+                p(class(U(TextSm, FgSlate500)), "Loading remote todos..."),
+                IfElse(q.err,
+                    p(class(U(TextSm, FgAmber500)),
+                        text("Fetch failed (HTTP %d): %s", (i32)q.httpStatus, q.data)),
+                    div(
+                        class(U(Flex, FlexCol, Gap(1))),
+                        map(t, remoteTitles, remoteTitleCount,
+                            p(id("remote-row"), class(U(TextSm, FgSlate600)),
+                                text("- %s", *t)))
+                    ))),
+            div(
+                class(U(Flex, Gap(2))),
+                AppButton(Props(AppButtonProps,
+                    .label = "Refetch",
+                    .tone = "plain",
+                    .domId = "refetch-remote",
+                    .onPress = refetchRemote,
+                    .isDisabled = q.loading,
+                ))
+            )
+        ),
+    ));
+}
+
 /* ------------------------------------------------------------- debug panel */
 
 typedef struct {
@@ -437,6 +506,8 @@ component(DashboardApp, props, DashboardAppProps) {
                 Show(stats.highPriorityOpen > 0,
                     p(id("high-priority-warning"), class(U(TextSm, FgAmber500)),
                         text("%d high-priority task(s) still open.", stats.highPriorityOpen))),
+
+                RemoteTodos(),
 
                 DebugPanel(Props(DebugPanelProps,
                     .renderCount = renderCount(),

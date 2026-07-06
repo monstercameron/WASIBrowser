@@ -20,6 +20,8 @@
  *   class(U(...)) + attrs go directly in    (no props() wrapper — removed)
  *   text("Count: %d", count)                reactive text (mini printf: %s %d %%)
  *   mapRange/map/mapKeyed/mapKeyedIf, bindI32(handler, i32)          lists
+ *   useQuery(key, url) / refetchQuery(key)   non-blocking async data (host
+ *     does the HTTP; completion re-renders — React Query, minus the queue)
  *   stateI32/stateBool/stateStr, set(name, v), previousI32           hooks
  *   event(name){...} / eventInput(name, e){...}, onClick/onInput     handlers
  *   id("...") type/value/placeholder(...)   attributes
@@ -325,6 +327,87 @@ static Node gc_on(Handler h, u16 kind) {
 static Handler Prevent(Handler h) { gc_handler_ret[h] |= 1; return h; }
 static Handler Stop(Handler h) { gc_handler_ret[h] |= 2; return h; }
 
+/* ------------------------------------------------------------ query cache
+ * React-Query-shaped async: useQuery(key, url) never blocks — it returns the
+ * cached state and starts a host-side fetch if idle/stale. Completion
+ * arrives as a NET_RESULT event; the framework stores the body and
+ * re-renders (full replace = every subscriber sees fresh state).
+ * Continuation context lives HERE (persistent statics), never on the stack.
+ */
+enum { QUERY_IDLE, QUERY_LOADING, QUERY_SUCCESS, QUERY_ERROR };
+
+typedef struct {
+    i32 loading;    /* request in flight, no data yet */
+    i32 ok;         /* status == QUERY_SUCCESS */
+    i32 err;        /* status == QUERY_ERROR */
+    u16 httpStatus; /* 0 = transport error */
+    const char *data; /* response body ("" until success), persistent */
+} QueryResult;
+
+#define GWBC_MAX_QUERIES 16
+#ifndef GWBC_QUERY_POOL_SIZE
+#define GWBC_QUERY_POOL_SIZE (64 * 1024)
+#endif
+
+typedef struct {
+    const char *key;
+    u8 status;
+    u32 reqId;
+    u16 httpStatus;
+    u32 dataOff; /* into gc_qpool; 0xFFFFFFFF = none */
+} GcQuery;
+
+static GcQuery gc_queries[GWBC_MAX_QUERIES];
+static u32 gc_query_count;
+static char gc_qpool[GWBC_QUERY_POOL_SIZE];
+static u32 gc_qpool_len;
+
+static GcQuery *gc_query_slot(const char *key) {
+    for (u32 i = 0; i < gc_query_count; i++)
+        if (gc_streq(gc_queries[i].key, key)) return &gc_queries[i];
+    if (gc_query_count >= GWBC_MAX_QUERIES) gwbc_panic("gwbc: query cache full");
+    GcQuery *q = &gc_queries[gc_query_count++];
+    q->key = key; q->status = QUERY_IDLE; q->reqId = 0;
+    q->httpStatus = 0; q->dataOff = 0xFFFFFFFFu;
+    return q;
+}
+
+static QueryResult useQuery(const char *key, const char *url) {
+    GcQuery *q = gc_query_slot(key);
+    if (q->status == QUERY_IDLE) {
+        q->reqId = gwb_fetch(url);
+        q->status = QUERY_LOADING;
+    }
+    QueryResult r = {0};
+    r.loading = q->status == QUERY_LOADING;
+    r.ok = q->status == QUERY_SUCCESS;
+    r.err = q->status == QUERY_ERROR;
+    r.httpStatus = q->httpStatus;
+    r.data = q->dataOff == 0xFFFFFFFFu ? "" : gc_qpool + q->dataOff;
+    return r;
+}
+
+/* Mark a query stale: the next render refetches. (Old body stays in the
+ * append-only pool until then — demo-grade; a real pool would compact.) */
+static void refetchQuery(const char *key) {
+    gc_query_slot(key)->status = QUERY_IDLE;
+}
+
+static void gc_query_complete(const gwb_event *e) {
+    for (u32 i = 0; i < gc_query_count; i++) {
+        GcQuery *q = &gc_queries[i];
+        if (q->reqId != e->target || q->status != QUERY_LOADING) continue;
+        if (gc_qpool_len + e->str_len + 1 > GWBC_QUERY_POOL_SIZE)
+            gwbc_panic("gwbc: query pool full (GWBC_QUERY_POOL_SIZE)");
+        q->dataOff = gc_qpool_len;
+        for (u32 j = 0; j < e->str_len; j++) gc_qpool[gc_qpool_len++] = e->str[j];
+        gc_qpool[gc_qpool_len++] = 0;
+        q->httpStatus = e->netStatus;
+        q->status = e->netOk ? QUERY_SUCCESS : QUERY_ERROR;
+        return;
+    }
+}
+
 /* node-id -> handler map, rebuilt each render */
 static u32 gc_hn_node[256]; static u32 gc_hn_handler[256]; static u16 gc_hn_kind[256];
 static u32 gc_hn_count;
@@ -543,6 +626,11 @@ static void gwbc_render(void) {
 }
 
 static u32 gc_on_event(const gwb_event *e) {
+    if (e->kind == GWB_EV_NET_RESULT) {
+        gc_query_complete(e);
+        gwbc_render(); /* plain re-render: all useQuery readers see new state */
+        return 0;
+    }
     for (u32 i = 0; i < gc_hn_count; i++) {
         if (gc_hn_node[i] == e->listener && gc_hn_kind[i] == e->kind) {
             /* Resolve payload-bound ids against THIS render's table before

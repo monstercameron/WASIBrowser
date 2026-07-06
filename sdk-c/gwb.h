@@ -40,6 +40,9 @@ enum {
     GWB_EV_FOCUS = 15, GWB_EV_BLUR = 16, GWB_EV_SCROLL = 17,
     GWB_EV_WINDOW_RESIZE = 18, GWB_EV_THEME_CHANGE = 19,
     GWB_EV_OBSERVED_LAYOUT = 32,
+    /* async completions: target = request id, payload = {status u16, ok u8},
+     * trailing str = response body (truncated to the event region) */
+    GWB_EV_NET_RESULT = 40,
 };
 
 enum { GWB_LOG_DEBUG = 0, GWB_LOG_INFO = 1, GWB_LOG_WARN = 2, GWB_LOG_ERROR = 3 };
@@ -54,6 +57,7 @@ GWB_IMPORT("submit") extern u32 gwb_imp_submit(const u8 *ptr, u32 len);
 GWB_IMPORT("event_region") extern void gwb_imp_event_region(const u8 *ptr, u32 len);
 GWB_IMPORT("log") extern void gwb_imp_log(u32 level, const u8 *ptr, u32 len);
 GWB_IMPORT("request_frame") extern void gwb_imp_request_frame(void);
+GWB_IMPORT("fetch") extern u32 gwb_imp_fetch(const u8 *ptr, u32 len);
 
 #define GWB_EXPORT(name) __attribute__((export_name(name)))
 
@@ -71,8 +75,16 @@ static void gwb_trap(const char *msg) {
     __builtin_trap();
 }
 
+/* Start an async GET; returns a request id. Completion arrives as a
+ * GWB_EV_NET_RESULT event (host does the HTTP on its own event loop). */
+static u32 gwb_fetch(const char *url) {
+    return gwb_imp_fetch((const u8 *)url, gwb_strlen(url));
+}
+
 /* ---- event region ---- */
+#ifndef GWB_EVENT_BUF_SIZE
 #define GWB_EVENT_BUF_SIZE 8192
+#endif
 static u8 gwb_event_buf[GWB_EVENT_BUF_SIZE];
 
 static void gwb_register_event_region(void) {
@@ -160,10 +172,12 @@ static u32 gwb_flush(void) {
 /* ---- event decode ---- */
 typedef struct {
     u16 kind, flags;
-    u32 target, listener;
+    u32 target, listener; /* NET_RESULT: target = request id */
     f32 x, y, w, h, dx, dy, scale;
     u16 buttons, mods;
     u8 pressed, dark;
+    u16 netStatus; /* NET_RESULT: HTTP status (0 = transport error) */
+    u8 netOk;
     const char *str; /* NUL-terminated view into the event region */
     u32 str_len;
 } gwb_event;
@@ -202,6 +216,10 @@ static u32 gwb_decode_events(u32 count, gwb_event_fn handler) {
             e.scale = gwb_getf32(r + 28);
             break;
         case GWB_EV_THEME_CHANGE: e.dark = (u8)gwb_get32(r + 20); break;
+        case GWB_EV_NET_RESULT:
+            e.netStatus = gwb_get16(r + 20);
+            e.netOk = r[22];
+            break;
         case GWB_EV_OBSERVED_LAYOUT:
             e.x = gwb_getf32(r + 20); e.y = gwb_getf32(r + 24);
             e.w = gwb_getf32(r + 28); e.h = gwb_getf32(r + 32);

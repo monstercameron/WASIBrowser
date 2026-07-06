@@ -20,6 +20,7 @@ use crate::ui::{ConsoleMsg, Source};
 pub const ABI_MAJOR: u32 = 1;
 
 pub mod ev {
+    pub const NET_RESULT: u16 = 40;
     pub const POINTER_DOWN: u16 = 1;
     pub const POINTER_UP: u16 = 2;
     pub const POINTER_MOVE: u16 = 3;
@@ -96,10 +97,19 @@ impl AtomEntry {
     }
 }
 
+/// A completed host-side HTTP request, shipped to the UI thread.
+pub struct NetResult {
+    pub id: u32,
+    pub status: u16,
+    pub ok: bool,
+    pub body: String,
+}
+
 pub struct Shared {
     pub atoms: Vec<Option<AtomEntry>>,
     pub batches: Vec<Vec<Op>>,
     pub event_region: (u32, u32),
+    pub next_fetch_id: u32,
     /// Guest called request_frame; cleared when gwb_frame is delivered.
     pub frame_requested: bool,
     /// Set once the window exists; lets request_frame wake the event loop.
@@ -427,6 +437,7 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         atoms: well_known_atoms(),
         batches: Vec::new(),
         event_region: (0, 0),
+        next_fetch_id: 0,
         frame_requested: false,
         window_id: None,
     }));
@@ -493,6 +504,66 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
             let source = if level >= 2 { Source::Stderr } else { Source::Stdout };
             crate::logger::log("guest:log", &text);
             console(&caller.data().proxy, source, &text);
+        },
+    )?;
+
+    // Async HTTP: the host owns the event loop and the sockets (the guest is
+    // freestanding wasm — no libuv/libcurl possible or needed). Each fetch
+    // runs on a short-lived host thread; completion returns to the UI thread
+    // as a NetResult and reaches the guest as a NET_RESULT event record.
+    linker.func_wrap(
+        "gwb",
+        "fetch",
+        |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| -> u32 {
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                return 0;
+            };
+            let data = mem.data(&caller);
+            let (ptr, len) = (ptr as usize, len as usize);
+            if ptr + len > data.len() {
+                return 0;
+            }
+            let url = String::from_utf8_lossy(&data[ptr..ptr + len]).into_owned();
+            let id = {
+                let mut g = caller.data().shared.lock().unwrap();
+                g.next_fetch_id += 1;
+                g.next_fetch_id
+            };
+            crate::logger::log("net", &format!("fetch #{id}: GET {url}"));
+            let proxy = caller.data().proxy.clone();
+            std::thread::Builder::new()
+                .name(format!("fetch-{id}"))
+                .spawn(move || {
+                    let started = Instant::now();
+                    let result = ureq::get(&url)
+                        .timeout(std::time::Duration::from_secs(15))
+                        .call();
+                    let (ok, status, body) = match result {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            (true, status, resp.into_string().unwrap_or_default())
+                        }
+                        Err(ureq::Error::Status(code, resp)) => {
+                            (false, code, resp.into_string().unwrap_or_default())
+                        }
+                        Err(e) => (false, 0, e.to_string()),
+                    };
+                    crate::logger::log(
+                        "net",
+                        &format!(
+                            "fetch #{id}: {} {} ({} bytes, {:.0?})",
+                            if ok { "OK" } else { "ERR" },
+                            status,
+                            body.len(),
+                            started.elapsed()
+                        ),
+                    );
+                    proxy.send_event(blitz_shell::BlitzShellEvent::Embedder(Arc::new(
+                        NetResult { id, status, ok, body },
+                    )));
+                })
+                .ok();
+            id
         },
     )?;
 
@@ -593,6 +664,13 @@ impl EventOut {
 
     pub fn theme_change(dark: bool) -> Self {
         EventOut::new(ev::THEME_CHANGE).u32_at(0, dark as u32)
+    }
+
+    pub fn net_result(status: u16, ok: bool, body: String) -> Self {
+        EventOut::new(ev::NET_RESULT)
+            .u16_at(0, status)
+            .u8_at(2, ok as u8)
+            .text(body)
     }
 }
 
