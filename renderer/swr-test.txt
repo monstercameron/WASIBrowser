@@ -1,0 +1,8 @@
+# stale-while-revalidate: refetch must NOT flash Loading; old rows stay
+wait 2500
+dump logs/swr-loaded.txt
+click #refetch-remote
+dump logs/swr-mid.txt
+wait 1200
+dump logs/swr-after.txt
+quit

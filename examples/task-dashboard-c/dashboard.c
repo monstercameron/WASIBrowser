@@ -364,14 +364,17 @@ component0(RemoteTodos) {
                                 text("- %s", *t)))
                     ))),
             div(
-                class(U(Flex, Gap(2))),
+                class(U(Flex, Gap(2), ItemsCenter)),
                 AppButton(Props(AppButtonProps,
                     .label = "Refetch",
                     .tone = "plain",
                     .domId = "refetch-remote",
                     .onPress = refetchRemote,
-                    .isDisabled = q.loading,
-                ))
+                    .isDisabled = q.fetching,
+                )),
+                /* stale-while-revalidate: old data stays; just hint */
+                If(q.fetching && !q.loading,
+                    span(class(U(TextXs, FgSlate500)), "refreshing..."))
             )
         ),
     ));

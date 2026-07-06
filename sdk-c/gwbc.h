@@ -523,12 +523,16 @@ static void gc_run_effects(void) {
  */
 enum { QUERY_IDLE, QUERY_LOADING, QUERY_SUCCESS, QUERY_ERROR };
 
+/* Stale-while-revalidate: a refetch keeps serving the previous data (no
+ * Loading flash); `fetching` says a request is in flight, `loading` only
+ * when there is nothing to show yet. */
 typedef struct {
-    i32 loading;    /* request in flight, no data yet */
-    i32 ok;         /* status == QUERY_SUCCESS */
+    i32 loading;    /* in flight AND no data yet (first load) */
+    i32 fetching;   /* in flight (first load OR background refetch) */
+    i32 ok;         /* status == QUERY_SUCCESS (data valid, maybe refetching) */
     i32 err;        /* status == QUERY_ERROR */
     u16 httpStatus; /* 0 = transport error */
-    const char *data; /* response body ("" until success), persistent */
+    const char *data; /* response body ("" until first success), persistent */
 } QueryResult;
 
 #define GWBC_MAX_QUERIES 16
@@ -539,6 +543,8 @@ typedef struct {
 typedef struct {
     const char *key;
     u8 status;
+    u8 inFlight;
+    u8 stale;
     u32 reqId;
     u16 httpStatus;
     u32 dataOff; /* into gc_qpool; 0xFFFFFFFF = none */
@@ -555,18 +561,24 @@ static GcQuery *gc_query_slot(const char *key) {
     if (gc_query_count >= GWBC_MAX_QUERIES) gwbc_panic("gwbc: query cache full");
     GcQuery *q = &gc_queries[gc_query_count++];
     q->key = key; q->status = QUERY_IDLE; q->reqId = 0;
+    q->inFlight = 0; q->stale = 0;
     q->httpStatus = 0; q->dataOff = 0xFFFFFFFFu;
     return q;
 }
 
 static QueryResult useQuery(const char *key, const char *url) {
     GcQuery *q = gc_query_slot(key);
-    if (q->status == QUERY_IDLE) {
+    if (!q->inFlight && (q->status == QUERY_IDLE || q->stale)) {
         q->reqId = gwb_fetch(url);
-        q->status = QUERY_LOADING;
+        q->inFlight = 1;
+        q->stale = 0;
+        if (q->status == QUERY_IDLE) q->status = QUERY_LOADING;
+        /* refetch of resolved data: status stays SUCCESS/ERROR — the old
+         * data keeps rendering (no Loading flash) */
     }
     QueryResult r = {0};
     r.loading = q->status == QUERY_LOADING;
+    r.fetching = q->inFlight;
     r.ok = q->status == QUERY_SUCCESS;
     r.err = q->status == QUERY_ERROR;
     r.httpStatus = q->httpStatus;
@@ -574,16 +586,18 @@ static QueryResult useQuery(const char *key, const char *url) {
     return r;
 }
 
-/* Mark a query stale: the next render refetches. (Old body stays in the
- * append-only pool until then — demo-grade; a real pool would compact.) */
+/* Mark a query stale: the next render starts a background refetch while
+ * the previous data keeps rendering. (Old bodies stay in the append-only
+ * pool — demo-grade; a real pool would compact.) */
 static void refetchQuery(const char *key) {
-    gc_query_slot(key)->status = QUERY_IDLE;
+    gc_query_slot(key)->stale = 1;
 }
 
 static void gc_query_complete(const gwb_event *e) {
     for (u32 i = 0; i < gc_query_count; i++) {
         GcQuery *q = &gc_queries[i];
-        if (q->reqId != e->target || q->status != QUERY_LOADING) continue;
+        if (q->reqId != e->target || !q->inFlight) continue;
+        q->inFlight = 0;
         if (gc_qpool_len + e->str_len + 1 > GWBC_QUERY_POOL_SIZE)
             gwbc_panic("gwbc: query pool full (GWBC_QUERY_POOL_SIZE)");
         q->dataOff = gc_qpool_len;
