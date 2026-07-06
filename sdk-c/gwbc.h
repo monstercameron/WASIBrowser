@@ -154,22 +154,43 @@ static Node Empty(void) { return gc_alloc(K_EMPTY); }
 /* ------------------------------------------------------------------ arenas
  * Zig-style bump arenas: alloc freely, free everything at once with reset().
  * save()/restore() carve a temporary scope (Zig's scratch-allocator pattern).
- * Fixed backing buffer -> OOM traps loudly (never silently clamps).
- *   Arena a = arenaMake(buf, sizeof buf);
+ *   Arena a = arenaMake(buf, sizeof buf);   // FIXED backing: OOM traps loudly
  *   Thing *t = arenaNew(&a, Thing);   Thing *xs = arenaArr(&a, Thing, n);
  *   u32 m = arenaSave(&a); ...scratch...; arenaRestore(&a, m);
  *   arenaReset(&a);   // reclaim all
- * A framework-managed per-render scratch arena is available via frameArena();
- * it is reset at the start of every render (like the node arena), so it is the
- * place for throwaway parse buffers feeding map(). */
-typedef struct { u8 *buf; u32 cap, off; } Arena;
+ *
+ * frameArena() is a framework-managed per-render scratch arena, reset at the
+ * start of every render (like the node arena). It is GROWING: rooted at the
+ * wasm heap (__heap_base), it extends into real linear memory via memory.grow
+ * on demand instead of trapping — Zig's ArenaAllocator behavior. It only ever
+ * grows to the render high-water mark, then reuses that capacity each frame.
+ * (grows==1 requires buf to sit at the heap top; only frameArena does this. A
+ * memory.grow refusal by the host still traps — the hard ceiling is real.) */
+typedef struct { u8 *buf; u32 cap, off; u8 grows; } Arena;
+
+extern u8 __heap_base; /* wasm-ld: first byte of free linear memory */
+#define GC_WASM_PAGE 65536u
+static u32 gc_mem_bytes(void) { return (u32)__builtin_wasm_memory_size(0) * GC_WASM_PAGE; }
 
 static Arena arenaMake(void *buf, u32 cap) {
-    return (Arena){ (u8 *)buf, cap, 0 };
+    return (Arena){ (u8 *)buf, cap, 0, 0 };
 }
 static void *arenaAlloc(Arena *a, u32 n) {
     a->off = (a->off + 7u) & ~7u; /* 8-byte align */
-    if (a->off + n > a->cap) gwbc_panic("gwbc: arena out of memory");
+    u32 want = a->off + n;
+    if (want > a->cap) {
+        if (!a->grows) gwbc_panic("gwbc: arena out of memory (fixed backing)");
+        /* growing arena: extend capacity by growing wasm memory. buf sits at the
+         * heap top, so all of linear memory above it is ours. */
+        u32 base = (u32)(__UINTPTR_TYPE__)a->buf;
+        u32 need_top = base + want;
+        if (need_top > gc_mem_bytes()) {
+            u32 pages = (need_top - gc_mem_bytes() + GC_WASM_PAGE - 1u) / GC_WASM_PAGE;
+            if (__builtin_wasm_memory_grow(0, pages) == (u32)-1)
+                gwbc_panic("gwbc: memory.grow refused (host memory ceiling)");
+        }
+        a->cap = gc_mem_bytes() - base; /* everything from buf to the new top */
+    }
     void *p = a->buf + a->off;
     a->off += n;
     return p;
@@ -180,12 +201,16 @@ static void arenaRestore(Arena *a, u32 mark) { a->off = mark; }
 #define arenaNew(a, T)      ((T *)arenaAlloc((a), (u32)sizeof(T)))
 #define arenaArr(a, T, n)   ((T *)arenaAlloc((a), (u32)sizeof(T) * (u32)(n)))
 
-#ifndef GWBC_FRAME_ARENA_SIZE
-#define GWBC_FRAME_ARENA_SIZE (128 * 1024)
-#endif
-static u8 gc_frame_buf[GWBC_FRAME_ARENA_SIZE];
-static Arena gc_frame = { gc_frame_buf, GWBC_FRAME_ARENA_SIZE, 0 };
-static Arena *frameArena(void) { return &gc_frame; }
+static Arena gc_frame; /* growing, heap-rooted; initialized on first use */
+static Arena *frameArena(void) {
+    if (!gc_frame.buf) {
+        gc_frame.buf = &__heap_base;
+        gc_frame.off = 0;
+        gc_frame.grows = 1;
+        gc_frame.cap = gc_mem_bytes() - (u32)(__UINTPTR_TYPE__)&__heap_base;
+    }
+    return &gc_frame;
+}
 
 static Node gwbc_text(const char *s) {
     Node n = gc_alloc(K_TEXT);
