@@ -332,6 +332,21 @@ realized-today still ≈ 2 (mostly unbuilt), and the crown-jewel regressions
 spec-family + identity-UX study must attack. The refinement's product is a
 *defensible* platform thesis, not a shipped one.
 
+**Draft-11 refresh (§21: personas, dev-ergonomics-proven, C-ladder chips,
+attack-success UX gate, privacy tests).** Like draft 9, this moved
+*defensibility, not the ceiling*. No Part II category number changed — instead:
+Trust legibility's conditional 7 is now backed by concrete render states
+(C0–C5 chips) + an auditable first-contact ceremony, but stays gated on the P0
+study (still 7→3 defensible). The P0 UX gate got a **better ruler** —
+impersonation **attack-success ≤5%** replaces "80% distinguish," so the study
+can now fail honestly. Privacy (8.3) became *falsifiable* via five MUST-be-NO
+acceptance tests. Language-freedom's 9 now rests on the real byte-identical
+`todo-go|rs|c` examples, not a sketch, and devtools/i18n became P2.5
+release-blockers. Where it *did* move is Part III (design-maturity): Adoption
+realism 8→9, Document structure 8→8.5. Naming-UX held at 7 — the ceremony is
+designed, not proven. Overall design ceiling **~8.8, flat**; the two discounts
+and the P0 identity-UX gate are unchanged.
+
 **Bottom line:** on this rubric next.0 is not "a better web." It is a
 *different bet* — trade the incumbent's latent failures for the challenger's
 adoption risk. If built and adopted, it dominates the dimensions that matter
