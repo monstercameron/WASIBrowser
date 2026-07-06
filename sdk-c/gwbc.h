@@ -1,17 +1,20 @@
 /* gwbc.h — C component framework on the GWB ABI ("JSX with the preprocessor").
  *
- * Sits on top of gwb.h (the LL binding). Gives freestanding C:
- *   COMPONENT / RETURN / USE / PROPS / PROP     components + composition
- *   STATE / STATE_STR / SET / PREVIOUS          name-keyed state registry
- *   EVENT / EVENT_INPUT                         handlers as render-declared blocks
- *   Div/P/H1/Button/Input/... variadic macros   bare strings auto-wrap via _Generic
- *   U(...) utility tokens (Tailwind-ish)        compiled to CLASSES + a stylesheet
- *   Hover(token)                                :hover variants (classes make it possible)
- *   EACH(i, n, node-expr)                       dynamic lists (statement expressions)
- *   Fragment(...)                               grouping without a wrapper div
- *   T("fmt", ...)                               reactive text (mini printf: %s %d %%)
- *   WHEN / IF / Empty / Id("...")               conditionals + stable test ids
- *   GWB_APP(Root, PROPS(...))                   generates the wasm exports
+ * Sits on top of gwb.h (the LL binding). Gives freestanding C a React-like,
+ * lowercase authoring surface (host elements lowercase, components PascalCase):
+ *   component(Name, props, PropsType) { ... return view(...); }
+ *   child(Component, { .field = v, ... })       composition with painless props
+ *   app(Root, { ... })                          generates the wasm exports
+ *   div/p/h1/button/input/span/...              variadic tags; bare strings become text
+ *   class(Flex, Gap(3), Hover(BgSlate700))      utility tokens -> classes + stylesheet
+ *   text("Count: %d", count)                    reactive text (mini printf: %s %d %%)
+ *   show(cond, node) / ifelse(c, a, b)          declarative conditionals (in-tree)
+ *   map_range(i, n, node) / map(it, arr, n, node) / map_keyed(...)   lists
+ *   state_i32/state_bool/state_str, set(name, v), previous_i32       hooks
+ *   event(name){...} / event_input(name, e){...}, on_click/on_input  handlers
+ *   id("...") type/value/placeholder(...)       attributes
+ * Rule of thumb: inside the returned tree use show/ifelse/map; outside it,
+ * write plain C (real if statements, real loops filling buffers).
  *
  * Model: immediate mode + full replace. Every event re-renders the whole tree
  * (two passes: handlers run, then a clean render) and replaces the mount's
@@ -28,17 +31,18 @@
  *
  * ERROR CATALOG (macro soup produces bad diagnostics; translate here):
  *  - "controlling expression type ... not compatible with any generic
- *    association" inside Div(...)/P(...) etc.
+ *    association" inside div(...)/p(...) etc.
  *      => you passed something that isn't a Node or a string (e.g. a Handler,
- *         an int, a function name without ()). Wrap text in T(...), handlers
- *         in OnClick(...)/OnInput(...).
+ *         an int, a function name without ()). Wrap text in text(...),
+ *         handlers in on_click(...)/on_input(...).
  *  - "too many arguments provided to function-like macro invocation" or
  *    GC_F33 undeclared
- *      => an element has more than 32 children/modifiers; split with Fragment.
+ *      => an element has more than 32 children/modifiers; split with frag().
  *  - "called object type 'Node' is not a function"
- *      => missing comma between two children, e.g. P(...) Div(...).
- *  - "use of undeclared identifier 'gwbc_use_XXX'"
- *      => STATE's type must be i32 (or use STATE_STR); no other types yet.
+ *      => missing comma between two children, e.g. p(...) div(...).
+ *  - weird parse errors on an ordinary identifier named div/p/type/value/...
+ *      => you declared a FUNCTION with a DSL macro's name; the macros only
+ *         fire on `name(` shapes, so variables are fine but functions clash.
  *  - wasm-ld "undefined symbol: strlen/memcpy/memset"
  *      => you forgot -fno-builtin (clang idiom-recognizes your loops into
  *         libc calls that don't exist). Use scripts/build-c.cmd.
@@ -528,63 +532,110 @@ static void gwbc_boot(void) {
 #define GWB_ELM(tag, ...) \
     gwbc_element(tag, (const Node[]){ GC_MAP(GC_N, __VA_ARGS__) }, GC_NARG(__VA_ARGS__))
 
-/* ---------------------------------------------------------------- the DSL */
+/* ------------------------------------------------------------------ the DSL
+ *
+ * Lowercase-only public API (React convention: lowercase = host elements,
+ * PascalCase = your components; utility tokens stay PascalCase constants).
+ * Function-like macros only expand at `name(` call shapes, so `div`, `p`,
+ * `type`, `value` etc. cannot corrupt ordinary identifiers — but avoid
+ * defining your own functions with these names in app code.
+ */
 
-#define Main(...) GWB_ELM(23, __VA_ARGS__) /* atom 23 = main */
-#define Div(...) GWB_ELM(GWB_DIV, __VA_ARGS__)
-#define Span(...) GWB_ELM(GWB_SPAN, __VA_ARGS__)
-#define P(...) GWB_ELM(GWB_P, __VA_ARGS__)
-#define H1(...) GWB_ELM(GWB_H1, __VA_ARGS__)
-#define H2(...) GWB_ELM(GWB_H2, __VA_ARGS__)
-#define H3(...) GWB_ELM(GWB_H3, __VA_ARGS__)
-#define Button(...) GWB_ELM(GWB_BUTTON, __VA_ARGS__)
-#define Input(...) GWB_ELM(GWB_INPUT, __VA_ARGS__)
-#define Fragment(...) \
+/* -- elements (host tags) -- */
+#define main(...) GWB_ELM(23, __VA_ARGS__)
+#define div(...) GWB_ELM(GWB_DIV, __VA_ARGS__)
+#define span(...) GWB_ELM(GWB_SPAN, __VA_ARGS__)
+#define p(...) GWB_ELM(GWB_P, __VA_ARGS__)
+#define h1(...) GWB_ELM(GWB_H1, __VA_ARGS__)
+#define h2(...) GWB_ELM(GWB_H2, __VA_ARGS__)
+#define h3(...) GWB_ELM(GWB_H3, __VA_ARGS__)
+#define button(...) GWB_ELM(GWB_BUTTON, __VA_ARGS__)
+#define input(...) GWB_ELM(GWB_INPUT, __VA_ARGS__)
+#define a(...) GWB_ELM(9, __VA_ARGS__)
+#define ul(...) GWB_ELM(11, __VA_ARGS__)
+#define li(...) GWB_ELM(13, __VA_ARGS__)
+#define section(...) GWB_ELM(20, __VA_ARGS__)
+#define header(...) GWB_ELM(21, __VA_ARGS__)
+#define footer(...) GWB_ELM(22, __VA_ARGS__)
+#define pre(...) GWB_ELM(26, __VA_ARGS__)
+#define strong(...) GWB_ELM(28, __VA_ARGS__)
+#define em(...) GWB_ELM(29, __VA_ARGS__)
+
+/* -- composition -- */
+#define frag(...) \
     gwbc_fragment((const Node[]){ GC_MAP(GC_N, __VA_ARGS__) }, GC_NARG(__VA_ARGS__))
+#define view(...) frag(__VA_ARGS__)
+#define empty() Empty()
 
-#define COMPONENT(name, Props, props) static Node name(Props props)
-#define RETURN(node) return (node)
-#define USE(component, props) component(props)
-#define PROPS(Type, ...) ((Type){ __VA_ARGS__ })
-#define PROP(name) props.name
-#define WHEN(cond, node) ((cond) ? (node) : Empty())
-#define IF(cond) if (cond)
+#define component(Name, props, PropsType) static Node Name(PropsType props)
+#define component0(Name) static Node Name(void)
+/* child(CounterPanel, { .name = name, .count = count }) — the braces' commas
+ * split into varargs and __VA_ARGS__ reassembles the compound literal. */
+#define child(Component, ...) Component(((Component##Props)__VA_ARGS__))
+#define child0(Component) Component()
 
-/* Dynamic lists: statement-expression loop producing a fragment.
- *   EACH(i, todo_count, WHEN(todos[i].alive, TodoRow(&todos[i]))) */
-#define EACH(var, count, body) (__extension__({ \
-    Node gc__each = gc_alloc(K_GROUP); \
-    for (i32 var = 0; var < (i32)(count); var++) gc_append(gc__each, (body)); \
-    gc__each; }))
+/* -- conditionals (inside the tree; outside the tree use plain C) -- */
+#define show(cond, node) ((cond) ? (node) : Empty())
+#define ifelse(cond, then_node, else_node) ((cond) ? (then_node) : (else_node))
 
-#define STATE(type, name, initial) type name = gwbc_use_##type(#name, initial)
-#define STATE_STR(name, initial) char *name = gwbc_use_str(#name, initial)
-#define SET(name, value) _Generic((value), \
-    char *: gwbc_set_str, const char *: gwbc_set_str, default: gwbc_set_i32)(#name, value)
-/* Stringizes the TRACKED state's variable name — PREVIOUS(i32, prev, count)
+/* -- lists (statement expressions; clang/gcc) -- */
+#define map_range(var, count, node_expr) (__extension__({ \
+    Node gc__f = gc_alloc(K_GROUP); \
+    for (i32 var = 0; var < (i32)(count); var++) gc_append(gc__f, (node_expr)); \
+    gc__f; }))
+#define map(item, array, len, node_expr) (__extension__({ \
+    Node gc__f = gc_alloc(K_GROUP); \
+    for (u32 gc__i = 0; gc__i < (u32)(len); gc__i++) { \
+        __auto_type item = &(array)[gc__i]; \
+        gc_append(gc__f, (node_expr)); \
+    } \
+    gc__f; }))
+/* Keys are accepted (and type-checked) now, used by the future reconciler;
+ * today this renders like map(). Keep keys stable and unique. */
+#define map_keyed(item, array, len, key_expr, node_expr) (__extension__({ \
+    Node gc__f = gc_alloc(K_GROUP); \
+    for (u32 gc__i = 0; gc__i < (u32)(len); gc__i++) { \
+        __auto_type item = &(array)[gc__i]; \
+        (void)(key_expr); \
+        gc_append(gc__f, (node_expr)); \
+    } \
+    gc__f; }))
+
+/* -- hooks -- */
+#define state_i32(name, initial) i32 name = gwbc_use_i32(#name, (initial))
+#define state_bool(name, initial) i32 name = gwbc_use_i32(#name, (initial) ? 1 : 0)
+#define state_str(name, initial) char *name = gwbc_use_str(#name, (initial))
+#define set(name, val) _Generic((val), \
+    char *: gwbc_set_str, const char *: gwbc_set_str, default: gwbc_set_i32)(#name, val)
+/* Stringizes the TRACKED state's variable name — previous_i32(prev, count)
  * reads the "count" slot's history, not a fresh "prev" slot. */
-#define PREVIOUS(type, name, value) Previous_##type name = gwbc_use_previous_##type(#value, value)
+#define previous_i32(name, val) Previous_i32 name = gwbc_use_previous_i32(#val, val)
 
-#define EVENT(name) \
+#define event(name) \
     Handler name = gwbc_handler(#name); \
     if (gwbc_handler_active(name))
-#define EVENT_INPUT(name, e) \
+#define event_input(name, e) \
     Handler name = gwbc_handler(#name); \
     InputEvent e = { gwbc_input_value(name) }; \
     if (gwbc_handler_active(name))
 
-#define T(...) Textf(__VA_ARGS__)
-#define U(...) __VA_ARGS__ /* utility tokens splat into the element's args */
-#define CSS(...) __VA_ARGS__
+/* -- text + styling -- */
+#define text(...) Textf(__VA_ARGS__)
+#define class(...) __VA_ARGS__ /* utility tokens splat into the element's args */
+#define css(...) __VA_ARGS__
 
-/* attributes + handlers */
-#define Id(v) gc_attr(GWB_ATTR_ID, v)
-#define TestId(v) gc_attr(GWB_ATTR_ID, v)
-#define Type(v) gc_attr(GWB_ATTR_TYPE, v)
-#define Value(v) gc_attr(GWB_ATTR_VALUE, v)
-#define Placeholder(v) gc_attr(GWB_ATTR_PLACEHOLDER, v)
-#define OnClick(h) gc_on((h), GWB_EV_CLICK)
-#define OnInput(h) gc_on((h), GWB_EV_INPUT)
+/* -- attributes + handlers -- */
+#define id(v) gc_attr(GWB_ATTR_ID, v)
+#define test_id(v) gc_attr(GWB_ATTR_ID, v)
+#define type(v) gc_attr(GWB_ATTR_TYPE, v)
+#define value(v) gc_attr(GWB_ATTR_VALUE, v)
+#define placeholder(v) gc_attr(GWB_ATTR_PLACEHOLDER, v)
+#define on_click(h) gc_on((h), GWB_EV_CLICK)
+#define on_input(h) gc_on((h), GWB_EV_INPUT)
+
+/* -- small helpers -- */
+static i32 min_i32(i32 a, i32 b) { return a < b ? a : b; }
+static i32 max_i32(i32 a, i32 b) { return a > b ? a : b; }
 
 /* utility tokens (Tailwind-ish) — compiled to classes + one <style> sheet */
 #define Hover(token) gc_hover(token)
@@ -639,5 +690,8 @@ static void gwbc_boot(void) {
         return gwb_decode_events(count, gc_on_event); \
     } \
     GWB_EXPORT("gwb_frame") void gwbc_frame_(f32 dt) { (void)dt; }
+
+/* app(StarterApp, { .title = "...", .initial_count = 0 }) */
+#define app(Component, ...) GWB_APP(Component, ((Component##Props)__VA_ARGS__))
 
 #endif /* GWBC_H */
