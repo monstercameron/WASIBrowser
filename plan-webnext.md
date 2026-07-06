@@ -1,5 +1,5 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 6 — for critique, not yet pinned
+### Plan draft 7 — for critique, not yet pinned
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
@@ -352,8 +352,12 @@ human — they are Tier-0 UX, not polish:
    3. **Anti-hijack (the real one):** an attacker claiming native top-label
       `amazon` and delegating a child `com` *would* make `amazon.com` resolve
       natively and shadow the legacy site. That is caught, not silent: when a
-      native chain's serialization also parses as a live legacy domain and its
-      top label is **not pinned** by you, chrome shows an explicit
+      native chain's serialization is **legacy-domain-shaped** — its final
+      label is in the legacy-TLD table (the cheap syntactic test; the browser
+      *may* additionally confirm an actual DNS record exists to avoid
+      over-triggering on coincidental strings, but the syntactic test alone is
+      safe since it only shows the chooser *more* often) — **and** its top
+      label is **not pinned** by you, chrome shows an explicit
       *"native identity (unknown key) — NOT the legacy site amazon.com —
       [open native] [open legacy DNS]"* disambiguation. The user is never
       silently sent to a native squat of a legacy name.
