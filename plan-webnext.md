@@ -1206,6 +1206,16 @@ per-app privacy profiles (§11).
   verifying. *Demo: RemoteTodos endpoint moves hosts AND rotates to a
   successor key mid-session, nothing breaks; a $0.01-per-read charge clears
   in a browser-native prompt.*
+- **P3.5 — WVEP beyond payments (§13).** The non-money value classes on top
+  of P3's payment slice: the ATTENTION frame (browser-controlled, no
+  third-party scripts) and the strictest-sandbox COMPUTE worker + Value
+  Session + greed ledger; then STORAGE/BANDWIDTH (reusing the P1 chunk store)
+  and JUDGMENT; broker accountability + federation last. Crypto-generation
+  ships behind the §13.4 disclosure gate. *Demo: a news bundle unlocked three
+  ways — pay $0.10, watch a tracked-free sponsor frame, or run 90s of
+  gentle CPU compute — each producing a verifiable receipt; the ledger shows
+  the real per-unlock cost; a battery laptop is offered pay/attention, not
+  compute.*
 - **P4 — LAN + swarm.** mDNS peer fetch, then DHT + QUIC + Wirehair fountain
   codec (§3). *Demo: two machines, cable between them, no internet: app
   transfers and runs.*
@@ -1516,6 +1526,8 @@ clipboard.read         require clipboard grant + user gesture
 notifications.show     require notification grant
 swarm.seed             require public-seeding grant
 identity.sign          require scoped-identity grant
+value.request_offer    require value_exchange grant + the offer's class in caps (§13)
+value.start_session    require value_exchange grant + per-class + intensity within cap
 ```
 
 Wasmtime handles memory isolation + the import boundary; this layer handles
@@ -1707,7 +1719,8 @@ workers, host-mediated, receipted.
 { "type": "webnext.value.receipt", "v": 1,
   "offer_hash": "b3:...", "site": "ed:...", "resource": "b3:...",
   "value": { "kind": "COMPUTE", "class": "useful_compute", "credits": 12 },
-  "actual_cost": { "cpu_ms": 87312, "wall_ms": 362000, "energy_wh": 4.1 },
+  "metered": { "cpu_ms": 87312, "wall_ms": 362000 },   // fuel/epoch-attestable
+  "estimated": { "energy_wh": 4.1 },                   // best-effort, NOT attested
   "broker": "ed:...", "settled_to": "ed:site_revenue_key",
   "privacy": { "user_identity_disclosed": false, "relay_used": true },
   "expires": "...", "sig": "..." }
@@ -1716,6 +1729,13 @@ workers, host-mediated, receipted.
 Authorities are the plan's own — `site/broker/buyer = ed:` or `name~keytag`,
 `worker_bundle = b3:`. Bare names never suffice (§10 R1): `settle_to:
 "ed:8f2a..."` or `dailyledger~cedar-finch`, never `settle_to: "news-site"`.
+**What's attestable vs estimated (honesty):** the receipt separates `metered`
+values the fuel/epoch limiter (§11.4) can actually attest (`cpu_ms`,
+`wall_ms`, bytes, storage) from `estimated` ones it can't — notably
+**`energy_wh` is a best-effort estimate, not a cryptographic fact** (there is
+no portable per-workload power API; thermal/voltage/shared-rail variance make
+kWh unattestable), shown with an "est." qualifier everywhere and never
+presented as metered truth.
 
 ### 13.2 Declared capability, strictest worker sandbox
 
@@ -1734,7 +1754,7 @@ expansion on update — §11.6 R4).
 
 No "free" label unless the real cost is zero. Every option discloses its true
 price — money amount + recipient; attention duration + sponsor + tracking
-status; compute CPU/GPU-time + energy + heat + broker + category;
+status; compute CPU-time + estimated energy/heat + broker + category;
 storage/bandwidth caps + serving obligations; judgment task-count + category +
 sensitivity. The host keeps a per-site **Value Ledger** so users can see who
 is greedy — the honesty mechanism that makes site-set prices safe:
@@ -1749,14 +1769,26 @@ Daily Ledger · cedar-finch — this month: 12 unlocks · 18m CPU · 0.12 kWh es
 The spiciest capability gets the tightest rules. Crypto generation is a
 **subclass of COMPUTE, not special authority** — a compute workload with
 stricter disclosure. Hard invariants: opt-in only; **battery = disabled by
-default**, GPU = "ask", background = disabled; must show coin/network +
-recipient + pool + intensity + duration in **trusted chrome** (§10.6);
-instantly stoppable; budget-bounded; **declared-pool-only network** (no
-arbitrary P2P, no port-scan, no proxying, no unbounded pool-switching); cannot
-masquerade as science compute (category is declared and enforced). Plus a
-greed disclosure the ad web never gives: *"this crypto ask is worth ~$0.002 to
-unlock — direct payment is cheaper."* This is how it stays honest instead of
-recreating browser cryptojacking.
+default**, background = disabled; must show coin/network + recipient + pool +
+intensity + duration in **trusted chrome** (§10.6); instantly stoppable;
+budget-bounded (CPU fuel/epoch, §11.4); cannot masquerade as science compute
+(category is declared and enforced). Plus a greed disclosure the ad web never
+gives: *"this crypto ask is worth ~$0.002 to unlock — direct payment is
+cheaper."* This is how it stays honest instead of recreating browser
+cryptojacking. **CPU-only, and honestly so:** value workers are CPU compute
+under the fuel/epoch limiter (§11.4); **GPU compute is out of scope** — wasmtime
+has no GPU-sandboxing primitive, so exposing GPU to a guest worker would be an
+un-bounded, un-metered capability with no enforcement story, and the plan does
+not hand-wave one. (The renderer's own Vello/wgpu GPU use is host-controlled,
+never guest-exposed.) A GPU value class waits on a real sandbox design.
+
+**"Declared pool" is the broker's disclosure, not a second network
+destination.** The sandboxed worker's network stays **broker-only** (§13.2),
+full stop — it never reaches a raw Stratum pool (which has no `ed:` identity,
+so trusting one directly would violate R1). The "pool" shown in trusted chrome
+is what the accountable `ed:` **broker** discloses and bridges to, exactly as
+payments settlement bridges to cards/bank rails (§13.5): the worker→host→broker
+relationship is unchanged; the broker does the legacy-pool bridging.
 
 ### 13.5 Brokers, settlement, scale — no blockchain required
 
@@ -1771,22 +1803,47 @@ completes → broker signs receipt → credits the site. Scale comes from
 **stateless receipt verification**: a site verifies a receipt's signature +
 offer-hash + expiry and unlocks, never re-contacting the user — horizontally
 scalable, and storage/bandwidth reuse the §2 chunk store + §2b lifecycle
-wholesale. Privacy modes map onto §5: *Fast* (direct broker), *Private* (relay
-broker traffic, coarse hardware class, no stable worker reputation), *Strict*
-(money/attention only, no compute/storage/bandwidth — hardware can't be
-fingerprinted by work it never does).
+wholesale.
+
+**Brokers are NOT a new tracker — the unlinkability invariant (§1, §5) is
+enforced here too.** A worker presents to a broker the *same* app-scoped
+derived key as everything else — `HKDF(master, site_authority)` — so a broker
+sees a **per-site pseudonym, never a per-device/per-user identity**, and
+cannot correlate "this worker did jobs for site A, B, and C" across sites, by
+construction (exactly the guarantee §4a states for payment payees). Any
+routing signal a broker uses is **anonymous/aggregate hardware class only**
+(e.g. "8-core laptop, plugged in") with **no persistent worker id, even in
+Fast mode**; there is deliberately no cross-session per-worker reputation by
+default (a stronger continuity signal is an explicit opt-in tier, never the
+default — it would trade away the invariant). Privacy modes then layer onto
+§5: *Fast* (direct broker connection, per-site pseudonym), *Private* (relay
+the broker traffic too, so the broker sees neither IP nor a stable class),
+*Strict* (money/attention only — hardware can't be fingerprinted by work it
+never does).
 
 ### 13.6 Safety invariants (extend §10, don't replace it)
 
 WVEP's non-negotiables are §10's rules applied to value: no value extraction
 without a browser-mediated, signed-offer session; no execution without a
 verified worker bundle; no compute worker with DOM or ambient network; no
-unbounded CPU/GPU/mem/disk/net; no battery-compute or crypto by default; no
-third-party attention tracking; no contribution of private user data; no
-receipt without a provider signature; no silent permission expansion on worker
-update; the user can kill any session; the host records per-site actual cost.
-Value prompts, the live-session indicator, and kill switches are
-**browser-native only** (§10.6) — an app can't draw a fake pay/mine dialog.
+unbounded CPU/mem/disk/net (GPU not exposed, §13.4); no battery-compute or
+crypto by default; no third-party attention tracking; no contribution of
+private user data; no receipt without a provider signature; no silent
+permission expansion on worker update; the user can kill any session; the host
+records per-site actual cost. Value prompts, the live-session indicator, and
+kill switches are **browser-native only** (§10.6) — an app can't draw a fake
+pay/mine dialog.
+
+**Honest open risk — JUDGMENT content the protocol can't police.** The
+runtime enforces *technical* bounds on human-judgment tasks (count,
+wall-clock, disclosed category, sensitivity flag) — but it has **no way to
+vet the moral/legal fitness of the task content itself**: a "3 quick tasks to
+unlock" flow could be labeling CSAM, self-harm, or disinformation dressed as
+benign eval. This is named, not hidden (same discipline as §4a's monetization
+scope and §10.4's "the protocol verifies *who* answered, not that the answer
+is *fair*"): category-disclosure + bounds are enforced; content fitness is
+**unsolved by the protocol**, mitigated only by broker accountability +
+reputation + user-policy category blocks, and that limit is stated plainly.
 
 ### 13.7 Why it fits, and why it beats the ad model
 
