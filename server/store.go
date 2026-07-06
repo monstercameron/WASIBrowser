@@ -1,11 +1,15 @@
 package main
 
 import (
+	"crypto/pbkdf2"
+	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
+	"crypto/subtle"
 	"sort"
 	"sync"
 )
+
+const pbkdf2Iters = 120_000 // OWASP-ish floor for PBKDF2-HMAC-SHA256
 
 // store is the in-memory storefront data: products, users, carts, orders.
 // A real service would back this with a database; the RPC surface is identical.
@@ -36,11 +40,11 @@ type Product struct {
 
 // User — a shopper or admin. Password stored salted-hashed (demo-grade).
 type User struct {
-	Sub    string `json:"sub"`  // email
-	Name   string `json:"name"`
-	Role   string `json:"role"` // "user" | "admin"
-	salt   string
-	pwHash string
+	Sub   string `json:"sub"`  // email
+	Name  string `json:"name"`
+	Role  string `json:"role"` // "user" | "admin"
+	salt  []byte
+	pwKey []byte
 }
 
 // CartItem / Cart — the shopper's basket.
@@ -69,9 +73,21 @@ type ShipInfo struct {
 	Zip     string `json:"zip"`
 }
 
-func saltedHash(salt, pw string) string {
-	h := sha256.Sum256([]byte(salt + "\x00" + pw))
-	return hex.EncodeToString(h[:])
+// pwHash derives a password hash with PBKDF2-HMAC-SHA256 (stdlib, Go 1.24+).
+// A real deployment would use argon2id; PBKDF2 is the strongest stdlib KDF and
+// far better than a bare salted hash.
+func pwHash(salt []byte, pw string) []byte {
+	dk, err := pbkdf2.Key(sha256.New, pw, salt, pbkdf2Iters, 32)
+	if err != nil {
+		panic(err) // only errors on absurd params
+	}
+	return dk
+}
+
+func randSalt() []byte {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return b
 }
 
 func newStore() *store {
@@ -87,8 +103,8 @@ func newStore() *store {
 }
 
 func (s *store) addUser(sub, name, role, pw string) {
-	salt := saltedHash(sub, "salt")[:16]
-	s.users[sub] = &User{Sub: sub, Name: name, Role: role, salt: salt, pwHash: saltedHash(salt, pw)}
+	salt := randSalt()
+	s.users[sub] = &User{Sub: sub, Name: name, Role: role, salt: salt, pwKey: pwHash(salt, pw)}
 }
 
 func (s *store) seedUsers() {
@@ -101,7 +117,7 @@ func (s *store) checkPassword(email, pw string) *User {
 	if u == nil {
 		return nil
 	}
-	if saltedHash(u.salt, pw) != u.pwHash {
+	if subtle.ConstantTimeCompare(pwHash(u.salt, pw), u.pwKey) != 1 {
 		return nil
 	}
 	return u

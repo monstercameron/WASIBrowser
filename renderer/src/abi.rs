@@ -33,7 +33,11 @@ fn load_or_create_app_key() -> (Arc<ed25519_dalek::SigningKey>, String) {
             let mut s = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut s);
             let _ = std::fs::write(path, s);
-            crate::logger::log("rpc", "generated app-scoped key (.gwb-app-key.bin)");
+            // Restrict to owner-only where the platform supports it. NOTE: this
+            // is a DEV seed (gitignored); a real deployment keeps the app key in
+            // the OS keychain / TPM, never a plaintext file (spec §10.5).
+            restrict_key_file(path);
+            crate::logger::log("rpc", "generated app-scoped key (.gwb-app-key.bin, owner-only)");
             s
         }
     };
@@ -41,6 +45,17 @@ fn load_or_create_app_key() -> (Arc<ed25519_dalek::SigningKey>, String) {
     let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
     (Arc::new(key), pub_b64)
 }
+
+/// Best-effort owner-only permissions on the key seed. Unix sets 0600; on
+/// Windows the file inherits the user-profile ACL (already user-scoped) — the
+/// durable answer there is the OS keychain, out of scope for this dev seed.
+#[cfg(unix)]
+fn restrict_key_file(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+#[cfg(not(unix))]
+fn restrict_key_file(_path: &std::path::Path) {}
 
 pub mod ev {
     pub const NET_RESULT: u16 = 40;
@@ -499,7 +514,11 @@ fn console(proxy: &BlitzShellProxy, source: Source, text: &str) {
 
 /// Load a wasm module. Returns Ok(None) if it doesn't export the GWB ABI
 /// (caller should fall back to legacy console mode).
-pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntime>> {
+pub fn try_load(
+    path: &str,
+    proxy: BlitzShellProxy,
+    services: HashMap<String, ServiceEntry>,
+) -> Result<Option<GuestRuntime>> {
     let engine = Engine::default();
     let module = Module::from_file(&engine, path)
         .map_err(|e| anyhow!("loading {path}: {e}"))?;
@@ -509,16 +528,14 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         return Ok(None);
     }
 
-    // Phase 1 dev seed: a single "echo" service at the local dev server, so the
-    // RPC transport is testable before the manifest resolver (Phase 3) exists.
-    // Phase 3 replaces this with services parsed from the app manifest.
-    let mut services = HashMap::new();
-    let dev_endpoint = std::env::var("GWB_RPC_ENDPOINT")
-        .unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
-    services.insert(
-        "echo".to_string(),
-        ServiceEntry { endpoint: dev_endpoint.clone(), iface: "gwb.echo.v1".to_string(), server_key: String::new() },
-    );
+    // Service registry (capabilities) comes from the resolved app manifest
+    // (manifest.rs / docs/04-WEB-RPC.md §4). rpc_call's `service` indexes it;
+    // an undeclared name is a capability violation, rejected pre-network.
+    {
+        let mut names: Vec<&str> = services.keys().map(|s| s.as_str()).collect();
+        names.sort();
+        crate::logger::log("rpc", &format!("services declared: [{}]", names.join(", ")));
+    }
 
     let (app_key, app_key_b64) = load_or_create_app_key();
     let shared = Arc::new(Mutex::new(Shared {
