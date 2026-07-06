@@ -1772,8 +1772,12 @@ The spiciest capability gets the tightest rules. Crypto generation is a
 stricter disclosure. Hard invariants: opt-in only; **battery = disabled by
 default**, background = disabled; must show coin/network + recipient + pool +
 intensity + duration in **trusted chrome** (§10.6); instantly stoppable;
-budget-bounded (CPU fuel/epoch, §11.4); cannot masquerade as science compute
-(category is declared and enforced). Plus a greed disclosure the ad web never
+budget-bounded (CPU fuel/epoch, §11.4); category is declared, and a mislabeled
+workload (crypto dressed as "science") is caught the same way over-declared
+permissions are (§11.5): **runs-and-observes + broker reputation**, not
+real-time semantic verification — a black-box WASM worker's actual computation
+can't be proven against its label by the limiter alone, and the doc says so
+rather than asserting flat enforcement. Plus a greed disclosure the ad web never
 gives: *"this crypto ask is worth ~$0.002 to unlock — direct payment is
 cheaper."* This is how it stays honest instead of recreating browser
 cryptojacking. **CPU-only, and honestly so:** value workers are CPU compute
@@ -1816,7 +1820,16 @@ routing signal a broker uses is **anonymous/aggregate hardware class only**
 (e.g. "8-core laptop, plugged in") with **no persistent worker id, even in
 Fast mode**; there is deliberately no cross-session per-worker reputation by
 default (a stronger continuity signal is an explicit opt-in tier, never the
-default — it would trade away the invariant). Privacy modes then layer onto
+default — it would trade away the invariant). (That "no persistent id" is
+about the cryptographic *identity* axis; the broker-visible *IP* in Fast mode
+is a separate correlation channel governed by §5's privacy tiers — Private
+mode relays it away — not the identity guarantee, and the two shouldn't be
+conflated.) Notably there is **no broker→worker payout leg at all**: the
+user's contribution *is* the payment, redeemed as access, and settlement flows
+only broker→site (`settled_to: ed:site_revenue_key`) — so the classic
+"paying the contributor needs a correlatable identity" problem simply does not
+arise, crypto included (the *broker*, with its own accountable `ed:`, bridges
+to the pool). Privacy modes then layer onto
 §5: *Fast* (direct broker connection, per-site pseudonym), *Private* (relay
 the broker traffic too, so the broker sees neither IP nor a stable class),
 *Strict* (money/attention only — hardware can't be fingerprinted by work it
