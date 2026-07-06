@@ -751,13 +751,22 @@ static GcRpc gc_rpcs[GWBC_MAX_RPCS];
 static u32 gc_rpc_count;
 static char gc_rpcpool[GWBC_RPC_POOL_SIZE];
 static u32 gc_rpcpool_len;
+/* Keys must OUTLIVE the render arena: callers pass strf("catalog:%s", cat)
+ * (arena-allocated, reset every render), so the slot copies the key here.
+ * Without this, a stale key pointer aliases reused arena bytes and a changed
+ * key wrongly matches an old slot — the "filtering does nothing" bug. */
+static char gc_rpc_keys[GWBC_MAX_RPCS][64];
 
 static GcRpc *gc_rpc_slot(const char *key) {
     for (u32 i = 0; i < gc_rpc_count; i++)
         if (gc_streq(gc_rpcs[i].key, key)) return &gc_rpcs[i];
     if (gc_rpc_count >= GWBC_MAX_RPCS) gwbc_panic("gwbc: rpc cache full (GWBC_MAX_RPCS)");
-    GcRpc *r = &gc_rpcs[gc_rpc_count++];
-    r->key = key; r->status = RPC_IDLE; r->inFlight = 0; r->stale = 0;
+    u32 idx = gc_rpc_count++;
+    GcRpc *r = &gc_rpcs[idx];
+    u32 n = 0; while (key[n] && n < 63) { gc_rpc_keys[idx][n] = key[n]; n++; }
+    gc_rpc_keys[idx][n] = 0;
+    r->key = gc_rpc_keys[idx];
+    r->status = RPC_IDLE; r->inFlight = 0; r->stale = 0;
     r->errClass = 0; r->reqId = 0; r->httpStatus = 0; r->dataOff = 0xFFFFFFFFu;
     return r;
 }

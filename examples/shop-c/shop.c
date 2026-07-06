@@ -54,7 +54,7 @@ static void parse_products(const char *json) {
         read_product(e, &g_prods[g_prodCount++]);
 }
 
-typedef struct { char id[48], name[72], img[12]; i32 qty, lineTotal; } CartLine;
+typedef struct { char id[48], name[72], img[12], cat[24]; i32 qty, lineTotal; } CartLine;
 static CartLine g_cart[32];
 static i32 g_cartN, g_cartSubtotal;
 static void parse_cart(const char *json) {
@@ -67,6 +67,7 @@ static void parse_cart(const char *json) {
         js_get_str(prod, "id", l->id, sizeof l->id);
         js_get_str(prod, "name", l->name, sizeof l->name);
         js_get_str(prod, "image", l->img, sizeof l->img);
+        js_get_str(prod, "category", l->cat, sizeof l->cat);
         l->qty = js_get_int(e, "qty");
         l->lineTotal = js_get_int(e, "lineTotal");
     }
@@ -91,6 +92,16 @@ static void parse_orders(const char *json) {
 static const char *price_str(i32 cents) {
     i32 c = cents % 100;
     return strf("$%d.%d%d", cents / 100, c / 10, c % 10);
+}
+
+/* Product tiles use an elegant serif monogram on a category-tinted ground
+ * instead of external images (the runtime is self-contained — no remote
+ * assets). initial() = first letter; tint class keys the gradient. */
+static const char *initial(const char *s) {
+    static char b[2];
+    b[0] = (s && s[0]) ? s[0] : '?';
+    b[1] = 0;
+    return b;
 }
 
 /* ---------------------------------------------------------------- RPC callbacks */
@@ -133,84 +144,130 @@ static void onOrderPlaced(i32 ok, i32 ec, i32 status, const char *body, void *ud
 
 /* ---------------------------------------------------------------- styles */
 static const char *shopCss =
-    ".shop{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1c1917;"
-    "background:#faf9f7;min-height:100vh}"
-    ".wrap{max-width:1120px;margin:0 auto;padding:0 24px}"
-    ".nav{position:sticky;top:0;z-index:10;background:rgba(250,249,247,.86);"
-    "backdrop-filter:blur(10px);border-bottom:1px solid #e7e2da}"
-    ".nav .wrap{display:flex;align-items:center;gap:8px;height:64px}"
-    ".brand{font-weight:800;font-size:20px;letter-spacing:-.02em;cursor:pointer}"
-    ".brand .dot{color:#b45309}"
+    ".shop{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#211d1a;"
+    "background:#f7f4ef;min-height:100vh;-webkit-font-smoothing:antialiased}"
+    ".wrap{max-width:1160px;margin:0 auto;padding:0 28px}"
+    /* top bar */
+    ".nav{position:sticky;top:0;z-index:20;background:rgba(247,244,239,.82);"
+    "backdrop-filter:blur(14px);border-bottom:1px solid #e6ded2}"
+    ".nav .wrap{display:flex;align-items:center;gap:10px;height:68px}"
+    ".brand{font-weight:800;font-size:21px;letter-spacing:.02em;cursor:pointer;color:#211d1a}"
+    ".brand .dot{color:#a24e2a}"
     ".spacer{flex:1}"
-    ".navlink{font-size:14px;color:#57534e;cursor:pointer;padding:6px 10px;border-radius:8px}"
-    ".navlink:hover{background:#f0ece5;color:#1c1917}"
-    ".cartbtn{position:relative;font-size:14px;font-weight:600;cursor:pointer;"
-    "padding:8px 14px;border-radius:10px;background:#1c1917;color:#fff}"
-    ".badge{position:absolute;top:-6px;right:-6px;background:#b45309;color:#fff;font-size:11px;"
-    "min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;"
-    "justify-content:center;padding:0 4px;font-weight:700}"
-    ".hero{padding:44px 0 8px}"
-    ".eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:#b45309;font-weight:700}"
-    ".hero h1{font-size:40px;line-height:1.06;letter-spacing:-.03em;margin:10px 0 8px;font-weight:800}"
-    ".hero p{color:#57534e;font-size:16px;max-width:560px}"
-    ".chips{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0}"
-    ".chip{font-size:13px;padding:8px 16px;border-radius:999px;border:1px solid #e7e2da;"
-    "background:#fff;color:#57534e;cursor:pointer;transition:all .15s}"
-    ".chip:hover{border-color:#cfc7ba}"
-    ".chip.active{background:#1c1917;color:#fff;border-color:#1c1917}"
-    ".grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:8px 0 48px}"
-    ".card{background:#fff;border:1px solid #ece7df;border-radius:16px;overflow:hidden;"
-    "cursor:pointer;transition:transform .15s,box-shadow .15s;display:flex;flex-direction:column}"
-    ".card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(28,25,23,.10)}"
-    ".thumb{font-size:64px;height:176px;display:flex;align-items:center;justify-content:center;"
-    "background:linear-gradient(135deg,#f5f1ea,#efe8dd)}"
-    ".cbody{padding:16px;display:flex;flex-direction:column;gap:5px;flex:1}"
-    ".cat{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#a8a29e}"
-    ".name{font-weight:600;font-size:15px;line-height:1.3}"
-    ".crow{display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:10px}"
-    ".price{font-weight:700;font-size:16px}"
-    ".featured{font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.08em}"
-    ".btn{font-size:14px;font-weight:600;padding:10px 18px;border-radius:10px;cursor:pointer;"
-    "border:1px solid #e7e2da;background:#fff;color:#1c1917;transition:all .15s}"
-    ".btn:hover{background:#f5f1ea}"
-    ".btn.primary{background:#1c1917;color:#fff;border-color:#1c1917}"
-    ".btn.primary:hover{background:#3a3531}"
-    ".btn.accent{background:#b45309;color:#fff;border-color:#b45309}"
-    ".btn.accent:hover{background:#92400e}"
-    ".btn.block{width:100%;display:flex;justify-content:center;margin-top:8px}"
-    ".detail{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:24px 0 56px}"
-    ".art{font-size:140px;min-height:420px;display:flex;align-items:center;justify-content:center;"
-    "background:linear-gradient(135deg,#f5f1ea,#efe8dd);border-radius:20px}"
-    ".detail h1{font-size:32px;letter-spacing:-.02em;margin:6px 0}"
-    ".lead{color:#57534e;font-size:16px;line-height:1.6;margin:14px 0}"
-    ".meta{display:flex;gap:20px;color:#78716c;font-size:13px;margin:12px 0 24px}"
-    ".panel{background:#fff;border:1px solid #ece7df;border-radius:16px;padding:4px 20px;margin:20px 0}"
-    ".line{display:flex;align-items:center;gap:16px;padding:18px 0;border-bottom:1px solid #f0ece5}"
-    ".ico{font-size:36px;width:60px;height:60px;display:flex;align-items:center;justify-content:center;"
-    "background:#f5f1ea;border-radius:12px}"
-    ".grow{flex:1}"
-    ".qty{display:flex;align-items:center;gap:10px}"
-    ".qty button{width:30px;height:30px;border-radius:8px;border:1px solid #e7e2da;background:#fff;"
-    "cursor:pointer;font-size:16px;line-height:1}"
-    ".summary{display:flex;align-items:center;justify-content:space-between;padding:18px 0 6px;"
-    "font-size:20px;font-weight:700}"
-    ".muted{color:#78716c;font-size:14px}"
-    ".form{max-width:420px;margin:40px auto;background:#fff;border:1px solid #ece7df;"
-    "border-radius:18px;padding:32px}"
-    ".form h2{font-size:24px;letter-spacing:-.02em;margin:0 0 4px}"
-    ".field{display:flex;flex-direction:column;gap:6px;margin:16px 0}"
-    ".field label{font-size:13px;color:#57534e;font-weight:500}"
-    ".field input{padding:11px 14px;border:1px solid #ddd6cc;border-radius:10px;font-size:14px;background:#fdfcfa}"
-    ".field input:focus{outline:none;border-color:#b45309;box-shadow:0 0 0 3px rgba(180,83,9,.12)}"
-    ".err{color:#dc2626;font-size:13px;margin:6px 0}"
-    ".hint{font-size:12px;color:#a8a29e;margin-top:16px;line-height:1.7}"
-    ".confirm{max-width:480px;margin:60px auto;text-align:center}"
-    ".big{font-size:56px}"
-    ".ordertag{font-family:ui-monospace,monospace;font-weight:700;color:#b45309}"
-    ".empty{text-align:center;color:#78716c;padding:60px 0}"
-    ".spin{display:inline-block;width:22px;height:22px;border:3px solid #e7e2da;"
-    "border-top-color:#b45309;border-radius:50%;animation:sp .7s linear infinite}"
-    "@keyframes sp{to{transform:rotate(360deg)}}";
+    ".navlink{font-size:14px;color:#6b625a;cursor:pointer;padding:8px 12px;border-radius:9px;"
+    "transition:background .15s,color .15s;font-weight:500}"
+    ".navlink:hover{background:#ede6db;color:#211d1a}"
+    ".cartbtn{position:relative;font-size:14px;font-weight:600;cursor:pointer;padding:9px 18px;"
+    "border-radius:11px;background:#211d1a;color:#fff;transition:background .15s}"
+    ".cartbtn:hover{background:#3c352f}"
+    ".badge{position:absolute;top:-7px;right:-7px;background:#a24e2a;color:#fff;font-size:11px;"
+    "min-width:19px;height:19px;border-radius:10px;display:flex;align-items:center;"
+    "justify-content:center;padding:0 5px;font-weight:700;box-shadow:0 0 0 2px #f7f4ef}"
+    /* back row */
+    ".back{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#6b625a;"
+    "cursor:pointer;padding:8px 0;margin-top:18px;font-weight:500}"
+    ".back:hover{color:#a24e2a}"
+    ".crumb{font-size:13px;color:#a39a8f;margin:18px 0 0}"
+    ".crumb b{color:#6b625a;font-weight:600}"
+    /* hero */
+    ".hero{padding:40px 0 6px}"
+    ".eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#a24e2a;font-weight:700}"
+    ".hero h1{font-family:Georgia,'Times New Roman',serif;font-size:46px;line-height:1.04;"
+    "letter-spacing:-.01em;margin:12px 0 10px;font-weight:600;color:#211d1a}"
+    ".hero p{color:#6b625a;font-size:16px;max-width:540px;line-height:1.6}"
+    /* chips */
+    ".chips{display:flex;gap:9px;flex-wrap:wrap;margin:26px 0 8px}"
+    ".chip{font-size:13px;padding:9px 18px;border-radius:999px;border:1px solid #e0d7ca;"
+    "background:#fdfbf8;color:#6b625a;cursor:pointer;transition:all .15s;font-weight:500}"
+    ".chip:hover{border-color:#c9bdac;color:#211d1a}"
+    ".chip.active{background:#211d1a;color:#fbf8f3;border-color:#211d1a}"
+    /* grid + cards */
+    ".grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding:14px 0 56px}"
+    ".card{background:#fdfbf8;border:1px solid #ebe3d7;border-radius:14px;overflow:hidden;"
+    "cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s;"
+    "display:flex;flex-direction:column}"
+    ".card:hover{transform:translateY(-4px);box-shadow:0 16px 34px rgba(33,29,26,.11);border-color:#e0d7ca}"
+    /* monogram tile — the product 'image' */
+    ".tile{height:230px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}"
+    ".mono{font-family:Georgia,'Times New Roman',serif;font-size:96px;font-weight:600;"
+    "line-height:1;opacity:.9;user-select:none}"
+    ".tile .glyph{position:absolute;bottom:12px;right:14px;font-size:22px;opacity:.5}"
+    ".m-tops{background:linear-gradient(140deg,#eef1e9,#dfe6d6)}.m-tops .mono{color:#59684a}"
+    ".m-bottoms{background:linear-gradient(140deg,#eaedf3,#d8dceb)}.m-bottoms .mono{color:#485069}"
+    ".m-outerwear{background:linear-gradient(140deg,#f0efe4,#e2dfcd)}.m-outerwear .mono{color:#6a6644}"
+    ".m-footwear{background:linear-gradient(140deg,#f2ebe2,#e6d8c8)}.m-footwear .mono{color:#6b5138}"
+    ".m-accessories{background:linear-gradient(140deg,#f4ece5,#ecdccf)}.m-accessories .mono{color:#8a563a}"
+    ".cbody{padding:18px;display:flex;flex-direction:column;gap:5px;flex:1}"
+    ".rowtop{display:flex;justify-content:space-between;align-items:baseline}"
+    ".cat{font-size:10.5px;text-transform:uppercase;letter-spacing:.13em;color:#a39a8f;font-weight:600}"
+    ".featured{font-size:10px;font-weight:700;color:#a24e2a;text-transform:uppercase;letter-spacing:.1em}"
+    ".name{font-weight:600;font-size:15.5px;line-height:1.35;color:#211d1a}"
+    ".crow{display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:12px}"
+    ".price{font-weight:700;font-size:16px;color:#211d1a;font-variant-numeric:tabular-nums}"
+    /* buttons */
+    ".btn{font-size:14px;font-weight:600;padding:11px 20px;border-radius:11px;cursor:pointer;"
+    "border:1px solid #e0d7ca;background:#fdfbf8;color:#211d1a;transition:all .15s}"
+    ".btn:hover{background:#f2ebe1;border-color:#d3c7b7}"
+    ".btn.primary{background:#211d1a;color:#fbf8f3;border-color:#211d1a}"
+    ".btn.primary:hover{background:#3c352f}"
+    ".btn.accent{background:#a24e2a;color:#fff;border-color:#a24e2a}"
+    ".btn.accent:hover{background:#87401f}"
+    ".btn.small{padding:8px 14px;font-size:13px;border-radius:9px}"
+    ".btn.block{width:100%;display:flex;justify-content:center;margin-top:10px}"
+    /* detail */
+    ".detail{display:grid;grid-template-columns:5fr 6fr;gap:48px;padding:8px 0 64px;align-items:start}"
+    ".art{min-height:480px;border-radius:18px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}"
+    ".art .mono{font-size:200px}"
+    ".art .glyph{position:absolute;bottom:24px;right:28px;font-size:40px;opacity:.5}"
+    ".dcol{padding-top:8px}"
+    ".detail .cat{margin-bottom:10px}"
+    ".detail h1{font-family:Georgia,serif;font-size:36px;font-weight:600;letter-spacing:-.01em;margin:6px 0 4px;color:#211d1a}"
+    ".dprice{font-size:24px;font-weight:700;color:#211d1a;margin:8px 0 18px;font-variant-numeric:tabular-nums}"
+    ".lead{color:#6b625a;font-size:16px;line-height:1.7;margin:0 0 24px}"
+    ".meta{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 28px}"
+    ".pill{font-size:12.5px;color:#6b625a;background:#efe8dd;border-radius:999px;padding:6px 13px}"
+    /* cart / lists */
+    ".panel{background:#fdfbf8;border:1px solid #ebe3d7;border-radius:14px;padding:6px 22px;margin:18px 0}"
+    ".line{display:flex;align-items:center;gap:16px;padding:18px 0;border-bottom:1px solid #efe8dd}"
+    ".line:last-child{border-bottom:none}"
+    ".ico{width:56px;height:56px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0}"
+    ".ico .mono{font-size:26px}"
+    ".grow{flex:1;min-width:0}"
+    ".qty{display:flex;align-items:center;gap:12px}"
+    ".qty button{width:30px;height:30px;border-radius:8px;border:1px solid #e0d7ca;background:#fdfbf8;"
+    "cursor:pointer;font-size:17px;line-height:1;color:#6b625a}"
+    ".qty button:hover{background:#f2ebe1;color:#211d1a}"
+    ".qnum{min-width:20px;text-align:center;font-weight:600;font-variant-numeric:tabular-nums}"
+    ".summary{display:flex;align-items:center;justify-content:space-between;padding:20px 2px 8px;"
+    "font-size:21px;font-weight:700;color:#211d1a}"
+    ".summary .price{font-size:21px}"
+    ".muted{color:#87807a;font-size:14px}"
+    /* forms */
+    ".form{max-width:440px;margin:44px auto;background:#fdfbf8;border:1px solid #ebe3d7;"
+    "border-radius:18px;padding:36px;box-shadow:0 10px 30px rgba(33,29,26,.05)}"
+    ".form h2{font-family:Georgia,serif;font-size:27px;font-weight:600;letter-spacing:-.01em;margin:0 0 4px;color:#211d1a}"
+    ".field{display:flex;flex-direction:column;gap:7px;margin:18px 0}"
+    ".field label{font-size:13px;color:#6b625a;font-weight:600}"
+    ".field input{padding:12px 15px;border:1px solid #ddd3c5;border-radius:10px;font-size:14px;"
+    "background:#fffdfa;color:#211d1a;transition:border-color .15s,box-shadow .15s}"
+    ".field input:focus{outline:none;border-color:#a24e2a;box-shadow:0 0 0 3px rgba(162,78,42,.13)}"
+    ".err{color:#c0392b;font-size:13px;margin:8px 0;background:#fbeae7;padding:9px 12px;border-radius:9px}"
+    ".hint{font-size:12.5px;color:#a39a8f;margin-top:18px;line-height:1.8;border-top:1px solid #efe8dd;padding-top:14px}"
+    ".hint b{color:#6b625a}"
+    /* confirm */
+    ".confirm{max-width:500px;margin:72px auto;text-align:center}"
+    ".confirm .seal{width:76px;height:76px;border-radius:50%;background:#eaf0e4;color:#59684a;"
+    "font-size:38px;display:flex;align-items:center;justify-content:center;margin:0 auto 22px}"
+    ".confirm h1{font-family:Georgia,serif;font-size:32px;font-weight:600;color:#211d1a;margin:0 0 10px}"
+    ".ordertag{font-family:ui-monospace,'SF Mono',monospace;font-weight:700;color:#a24e2a;"
+    "background:#f4ece5;padding:2px 8px;border-radius:6px}"
+    ".empty{text-align:center;color:#87807a;padding:72px 0;font-size:15px}"
+    ".empty .btn{margin-top:18px}"
+    ".spin{display:inline-block;width:26px;height:26px;border:3px solid #e6ded2;"
+    "border-top-color:#a24e2a;border-radius:50%;animation:sp .7s linear infinite}"
+    "@keyframes sp{to{transform:rotate(360deg)}}"
+    ".grid,.detail,.confirm,.form,.panel{animation:fade .35s ease}"
+    "@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}";
 
 /* ---------------------------------------------------------------- catalog */
 component0(CatalogView) {
@@ -239,6 +296,7 @@ component0(CatalogView) {
         div(cls("chips"),
             map(c, CID, 6,
                 button(cls(strEq(cat, *c) ? "chip active" : "chip"),
+                    id(strf("chip-%s", *c)),
                     onClick(bindI32(pick, (i32)(c - CID))),
                     text("%s", CLBL[(i32)(c - CID)])))),
         IfElse(q.loading,
@@ -249,14 +307,17 @@ component0(CatalogView) {
                 map(p, g_prods, g_prodCount,
                     div(cls("card"), id(strf("card-%s", p->id)),
                         onClick(bindI32(open, (i32)(p - g_prods))),
-                        div(cls("thumb"), text("%s", p->image)),
+                        div(cls(strf("tile m-%s", p->category)),
+                            span(cls("mono"), text("%s", initial(p->name))),
+                            span(cls("glyph"), text("%s", p->image))),
                         div(cls("cbody"),
-                            span(cls("cat"), text("%s", p->category)),
+                            div(cls("rowtop"),
+                                span(cls("cat"), text("%s", p->category)),
+                                If(p->featured, span(cls("featured"), "Featured"))),
                             span(cls("name"), text("%s", p->name)),
-                            If(p->featured, span(cls("featured"), "Featured")),
                             div(cls("crow"),
                                 span(cls("price"), text("%s", price_str(p->price))),
-                                button(cls("btn accent"), id(strf("add-%s", p->id)),
+                                button(cls("btn accent small"), id(strf("add-%s", p->id)),
                                     onClick(bindI32(add, (i32)(p - g_prods))),
                                     "Add")))))))));
 }
@@ -278,20 +339,23 @@ component0(ProductView) {
     }
     return IfElse(q.loading,
         div(cls("empty"), span(cls("spin"))),
-        div(cls("detail"),
-            div(cls("art"), text("%s", pr.image)),
-            div(
-                span(cls("navlink"), onClick(back), "< Back to shop"),
-                div(cls("cat"), text("%s", pr.category)),
-                h1(text("%s", pr.name)),
-                div(cls("summary"), text("%s", price_str(pr.price))),
-                p(cls("lead"), text("%s", pr.blurb)),
-                div(cls("meta"),
-                    span(text("%d in stock", pr.stock)),
-                    span("Free shipping over $150"),
-                    span("30-day returns")),
-                button(cls("btn accent block"), id("detail-add"), onClick(addOne),
-                    text("Add to cart - %s", price_str(pr.price))))));
+        div(
+            span(cls("back"), id("detail-back"), onClick(back), "\xE2\x86\x90  Back to shop"),
+            div(cls("detail"),
+                div(cls(strf("art m-%s", pr.category)),
+                    span(cls("mono"), text("%s", initial(pr.name))),
+                    span(cls("glyph"), text("%s", pr.image))),
+                div(cls("dcol"),
+                    div(cls("cat"), text("%s", pr.category)),
+                    h1(text("%s", pr.name)),
+                    div(cls("dprice"), text("%s", price_str(pr.price))),
+                    p(cls("lead"), text("%s", pr.blurb)),
+                    div(cls("meta"),
+                        span(cls("pill"), text("%d in stock", pr.stock)),
+                        span(cls("pill"), "Free shipping over $150"),
+                        span(cls("pill"), "30-day returns")),
+                    button(cls("btn accent block"), id("detail-add"), onClick(addOne),
+                        text("Add to cart - %s", price_str(pr.price)))))));
 }
 
 /* ---------------------------------------------------------------- cart */
@@ -309,6 +373,7 @@ component0(CartView) {
         strf("{\"ID\":\"%s\"}", g_cart[i].id), GWB_RPC_F_SESSION, onCartChanged, 0); }
 
     return div(
+        span(cls("back"), onClick(shop), "\xE2\x86\x90  Continue shopping"),
         h1(cls("hero"), "Your cart"),
         IfElse(q.loading, div(cls("empty"), span(cls("spin"))),
         IfElse(g_cartN == 0,
@@ -319,17 +384,18 @@ component0(CartView) {
                 div(cls("panel"),
                     map(l, g_cart, g_cartN,
                         div(cls("line"),
-                            div(cls("ico"), text("%s", l->img)),
+                            div(cls(strf("ico m-%s", l->cat)),
+                                span(cls("mono"), text("%s", initial(l->name)))),
                             div(cls("grow"),
                                 div(cls("name"), text("%s", l->name)),
                                 div(cls("muted"), text("%s each", price_str(l->lineTotal / (l->qty ? l->qty : 1))))),
                             div(cls("qty"),
                                 button(onClick(bindI32(dec, (i32)(l - g_cart))), "-"),
-                                span(text("%d", l->qty)),
+                                span(cls("qnum"), text("%d", l->qty)),
                                 button(onClick(bindI32(inc, (i32)(l - g_cart))), "+")),
                             span(cls("price"), text("%s", price_str(l->lineTotal))),
                             span(cls("navlink"), onClick(bindI32(del, (i32)(l - g_cart))), "Remove")))),
-                div(cls("summary"), span("Subtotal"), span(text("%s", price_str(g_cartSubtotal)))),
+                div(cls("summary"), span("Subtotal"), span(cls("price"), text("%s", price_str(g_cartSubtotal)))),
                 p(cls("muted"), "Shipping & taxes calculated at checkout."),
                 button(cls("btn accent block"), id("go-checkout"), onClick(checkout),
                     "Proceed to checkout")))));
@@ -400,7 +466,7 @@ component0(CheckoutView) {
 component0(ConfirmView) {
     event(cont) { go(V_CATALOG); }
     return div(cls("confirm"),
-        div(cls("big"), "\xE2\x9C\x85"),
+        div(cls("seal"), "\xE2\x9C\x93"),
         h1("Order confirmed"),
         p(cls("muted"), "Thank you! Your order ",
             span(cls("ordertag"), text("%s", useAtom(gLastOrder))),
