@@ -30,11 +30,12 @@ bytes), *location* (which server), and *route* (which screen). next.0 splits
 them:
 
 ```
-wnx://<authority>/<path>[?query]
+web://<authority>/<path>[?query]
 
 authority :=  b3:<blake3-hash>        immutable bundle (identity == bytes)
            |  ed:<ed25519-pubkey>     mutable identity (signed pointer to a bundle)
-           |  name.tld                transitional petname, resolved via legacy rails
+           |  name                    free FCFS log name, dot-free (§1b)
+           |  name.tld                transitional: contains dots => legacy DNS ramp
 path      :=  route WITHIN the app (the app owns it; never a server path)
 ```
 
@@ -61,13 +62,18 @@ first-come-first-served claims on federated transparency logs**, with the
 squat economy killed structurally instead of priced out:
 
 ```
-claim   := { name, owner: ed25519 pubkey, expiry, sig }   -- FREE to file
+claim   := { name, owner: ed25519 pubkey, expiry, sig }   -- FREE, NON-EXCLUSIVE
 log     := append-only, merkle-audited (CT-style); N independent operators
            cross-sign each other's heads; anyone can mirror/audit a log;
-           clients require a claim to be present in a QUORUM of logs
-FCFS    := earliest quorum-logged claim wins; logs are auditable, so a log
-           that back-dates or censors is provably cheating and gets dropped
-           from client quorum sets (operators are replaceable, not trusted)
+           a claim counts only when present in a QUORUM of logs
+resolve := a name is NOT a monopoly. Many keys may claim "cam"; the durable,
+           globally-unique address is name~keytag (§1c) — infinite and
+           unstealable. Bare "cam" is a SOFT lookup: petname/history first,
+           then namespace policy, then trust ranking, then an explicit
+           chooser — never a silent winner. Logs order claims (earliest
+           first) for tie-break DISPLAY, not for exclusion; a back-dating or
+           censoring log is provably cheating and drops out of client quorum
+           sets (operators are replaceable, not trusted)
 ```
 
 Anti-squat without money — four structural deterrents:
@@ -86,6 +92,38 @@ Anti-squat without money — four structural deterrents:
    `ed:` — a name is a convenience label, not existence. Losing the string
    war doesn't unpublish anyone.
 
+**What a free name looks like.** One flat, global, dot-free label:
+
+```
+name    := [a-z0-9] [a-z0-9-]{1,61} [a-z0-9]     (2-63 chars, ascii v1)
+
+web://cam                      a person
+web://tasks                    an app
+web://cam/settings             route inside cam's app (path = app's, always)
+web://cam/todos/today          if cam's manifest is a DIRECTORY (below),
+                               "todos" selects the app, rest is its route
+```
+
+- **No TLDs.** TLDs exist to shard registry databases; quorum logs don't
+  need sharding, so `.com` dies with the registrar. **Dot-free is also the
+  disambiguator**: an authority *with* dots (`example.com`) is legacy DNS,
+  resolved via the ramp; an authority *without* dots is a log name. The two
+  namespaces cannot collide syntactically, so the transition never fights
+  the endgame.
+- **One claim, many apps.** A name binds to one key; that key's manifest
+  may be a **directory** — a signed map of sub-apps (`todos -> b3:...,
+  blog -> b3:...`), selected by the first path segment. Namespacing comes
+  from the publisher, not from the registry — no sub-name claims, no
+  sub-registrars, nothing new to squat.
+- **Confusables are folded before claiming.** Names are stored and matched
+  by their skeleton (Unicode confusable-folding; ascii-only in v1 makes
+  this trivial): `cam`, `càm`, and cyrillic `сam` are the *same claim* —
+  the phishing classic dies at the registry instead of in the URL bar.
+- **The browser shows the keytag.** Chrome (not the name itself) displays
+  `cam · a7f2` — a short fingerprint of the bound key. Names are for
+  humans; the keytag is the tell when something claims to be `cam` but
+  isn't bound to the key your petname book / history knows.
+
 Zooko's triangle honesty: this is *trust-minimized*, not trustless — global
 human names need SOME shared ordering, and a quorum of mutually-auditing,
 individually-disposable logs is the cheapest one that doesn't mint a token
@@ -93,6 +131,76 @@ or a landlord. Below it, **petnames** remain first-class: the browser lets
 users/communities bind their own labels to `ed:` keys (imported sets, like
 a contacts book), which covers the "names I actually type" case with zero
 global coordination at all.
+
+## 1c. Expansive & equitable: why no one parks
+
+An exclusive flat namespace ("the one global `cam`, earliest wins") is the
+*least* equitable design — it manufactures scarcity and rewards the fastest
+land-grabber. Draft-1's FCFS-exclusive framing was wrong on this axis;
+§1b above is now non-exclusive, and this section is why that makes parking
+economically dead rather than merely discouraged.
+
+**The parking economy needs three legs. next.0 removes all three:**
+
+1. **Exclusivity — gone.** You cannot corner a name others may also claim.
+   The durable, globally-unique address is `name~keytag` (a short
+   fingerprint of the bound key): `web://cam~a7f2`. That gives ~2^k anchors
+   per string, so *the namespace is effectively infinite* — every person
+   named cam gets a real, permanent `cam~<theirs>`. Bare `cam` is only a
+   local convenience, resolved per-user (§1b), never a deed.
+2. **Transferability — gone** (§1b: names are key-bound, no transfer record
+   type). You cannot sell what cannot move.
+3. **Passive yield — gone.** A claimed-but-unpublished name resolves to
+   *nothing*: no origin server, no default landing page, no ad slot to
+   inject — the entire parking-page business model requires a server that
+   auto-serves ads on an idle domain, and there isn't one. A dead name is a
+   dead resolve. Holding names yields exactly zero while costing renewal
+   (§1b liveness) forever, over inventory that isn't even scarce.
+
+**Namespaces are commons, not TLDs.** The expansive layer replaces
+ICANN-auctioned TLDs with permissionless, non-property namespaces:
+
+```
+web://nyc/hall            "nyc" is a namespace: its manifest is not a
+web://md/dr-chen          directory of apps but a POLICY + governance keys
+web://os/tetris           that governs how names WITHIN it are allocated
+```
+
+- A namespace is just a name (§1b) that opts into governing a sub-space by
+  publishing an allocation policy. It is **owned by no one**:
+  non-transferable like every name, and it **cannot extract rent** — a
+  namespace that charges fees is visible to clients and competes against
+  free ones; the default commons set shipped in the browser is free.
+- **Anyone can create a competing namespace**, permissionlessly. There is
+  no fixed TLD list to auction and no scarcity to corner — if a namespace
+  governs badly, communities fork it, exactly like the log operators. No
+  namespace is a monopoly.
+- **Policies vary by community, which is where equity lives**: geographic
+  (`nyc`, allocation gated on location attestation), professional (`md`,
+  gated on a credential attestation), open (`os`, pure FCFS-within, still
+  non-exclusive + keytag), curated (editorial). Underrepresented groups
+  self-govern their own space by their own fairness rules instead of
+  bidding against squatters in one global pool.
+- **Meta-scarcity** ("but who gets bare `nyc`?") dissolves the same way:
+  namespace names are themselves non-exclusive + keytag-anchored +
+  trust-resolved. The actual city wins bare `nyc` by attestation and
+  petname adoption, not by an exclusive grant — and if it doesn't, `nyc~<city
+  key>` still works for everyone who trusts that key.
+
+**Equity is not automatic — the honest open issues:**
+
+- *Script equity.* ASCII-only v1 privileges Latin scripts. Full IDN with
+  confusable-folding is a v-next *requirement*, not a nicety, or the
+  "equitable for all participants" claim is hollow for most of the planet.
+- *Compute equity.* Anti-sybil PoW (§1b) taxes the resource-poor if it's
+  heavy. It must stay cheap + one-time, or move to rate-limits / verifiable
+  delay functions (wall-clock, not hashpower) so a phone can claim a name
+  as easily as a datacenter.
+- *Discovery equity.* Soft resolution must not collapse to "rank by
+  popularity" — that's rich-get-richer with extra steps. Petname/history
+  first + an explicit chooser keeps the long tail reachable; the default
+  trust-ranking is itself a kingmaker surface and must be pluggable,
+  auditable, and never a single vendor's list.
 
 **Identity hashing for users** (the other half of "identity"): there is no
 global user id. The browser holds a master keypair per profile; for each app
@@ -342,7 +450,7 @@ What that deletes, per request, versus the HTTP-document web:
 
 The gateway ramp (§3) is the deliberate exception, and even there HTTP is
 demoted to a **dumb byte pipe**: one `GET /b3/<root>?blocks=...` returns a
-raw frame stream (`Content-Type: application/wnx-frames`); headers amortize
+raw frame stream (`Content-Type: application/web-frames`); headers amortize
 over megabytes, not per object, and nothing above the socket is HTTP-shaped.
 Legacy compatibility costs one header block per bundle, not one per asset —
 the 100-requests-per-page waterfall dies with the page model itself.
@@ -374,23 +482,30 @@ imports + event kinds. No change to the DOM ABI.
 renderer/
   src/store.rs      chunk store (BLAKE3-keyed, mmap'd; also wasmtime
                     compile cache keyed by module hash)
-  src/wnx/          resolver (b3/ed/dns ramp), manifest verify
-  src/wnx/gateway.rs  HTTP(S) chunk fetch (ureq today, QUIC later)
-  src/wnx/swarm.rs    DHT + peer protocol + fountain rx/tx (phase 3)
+  src/webproto/          resolver (b3/ed/dns ramp), manifest verify
+  src/webproto/gateway.rs  HTTP(S) chunk fetch (ureq today, QUIC later)
+  src/webproto/swarm.rs    DHT + peer protocol + fountain rx/tx (phase 3)
   src/rpc.rs        rpc host import + event delivery (mirrors fetch)
 docs/
-  WNX-NAMING.md  WNX-BUNDLE.md  WNX-SWARM.md  WNX-RPC.md   (specs first)
+  WEB-NAMING.md  WEB-BUNDLE.md  WEB-SWARM.md  WEB-RPC.md   (specs first)
 ```
 
 ## 7. Honest risks / open questions (critique targets)
 
-1. **Human names (§1b).** The federated-log FCFS design is trust-minimized,
-   not trustless: quorum sets of log operators are a governance surface
-   (who picks the default set shipped in the browser?). Also FCFS is still
-   FCFS — non-transferability kills the squat *market* but not spite-squats
-   or brand collisions; there is deliberately no dispute process (no UDRP,
-   no landlord). Is that the right trade, and who runs the first three
-   logs?
+1. **Human names (§1b/§1c).** Non-exclusive + keytag-anchored + namespaces-
+   as-commons kills the parking *economy* (no exclusivity, no resale, no
+   passive yield) and the scarcity that drove it — but trades a hard
+   guarantee for soft resolution: bare `web://bank` is no longer a promise,
+   it's a per-user lookup. That's honest (exclusive FCFS was *also* a
+   phishing vector — a squatter just grabs `bank`), and safety moves to
+   petnames + trust attestations + the keytag the chrome always shows — but
+   it puts real weight on the default trust-ranking, which is a kingmaker
+   surface. Three governance questions I can't answer alone: (a) who runs
+   the first quorum of logs, (b) who curates the default commons-namespace
+   set shipped in the browser, (c) how is the default soft-resolution
+   ranking kept from becoming a single vendor's chokepoint? My instinct:
+   all three pluggable + auditable, none baked in, ship with a small
+   plural default and let it fork. Is that a cop-out or the whole point?
 2. **Key loss = name loss** for `ed:`. Mitigations: social-recovery
    successor records (signed by M-of-N recovery keys named at creation);
    still weaker than "call GoDaddy". Acceptable?
@@ -418,19 +533,19 @@ docs/
 
 ## 8. Phases (each lands a demo in this repo)
 
-- **P0 — specs.** WNX-NAMING / WNX-BUNDLE / WNX-RPC drafts (WNX-SWARM
+- **P0 — specs.** WEB-NAMING / WEB-BUNDLE / WEB-RPC drafts (WEB-SWARM
   sketched). Exit: you've critiqued them.
-- **P1 — hashes over HTTP.** Chunk store + bundler CLI (`wnx pack`) +
-  `wnx://b3:...` loading via a gateway (a static file server) with full
+- **P1 — hashes over HTTP.** Chunk store + bundler CLI (`web pack`) +
+  `web://b3:...` loading via a gateway (a static file server) with full
   verification + offline relaunch from the store + compile cache.
-  *Demo: task-dashboard-c loads from `wnx://b3:...`, then loads again with
+  *Demo: task-dashboard-c loads from `web://b3:...`, then loads again with
   the network cable pulled.*
 - **P2 — publisher identity + lifecycle.** `ed:` manifests with the §2b
-  lifecycle fields, `wnx publish`, update flow with delta fetch (only
+  lifecycle fields, `web publish`, update flow with delta fetch (only
   changed chunks move), BUNDLE_OUTDATED event + gwbc `onUpdateAvailable`,
   store GC honoring retain/sunset. *Demo: v2 of the dashboard ships by
   moving <10% of its bytes; the still-running v1 shows an update banner
-  within a minute; `wnx publish --sunset` makes the store stop seeding it.*
+  within a minute; `web publish --sunset` makes the store stop seeding it.*
 - **P3 — RPC v1.** Host import + RPC_RESULT events + gwbc `useRpc` hook;
   rpc-over-HTTPS binding; a demo service (the todos backend) with a signed
   key, reached by pubkey. *Demo: RemoteTodos card, but the endpoint moves
