@@ -10,11 +10,12 @@
 //!   renderer.exe --crash-test     — deliberately panic on a worker thread
 //!                                   after 1s to exercise crash reporting
 
+mod abi;
 mod guest;
 mod logger;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use winit::dpi::LogicalSize;
@@ -45,7 +46,24 @@ fn main() -> Result<()> {
     let event_loop = create_default_event_loop();
     let (proxy, receiver) = BlitzShellProxy::new(event_loop.create_proxy());
 
-    let doc = GwbDocument::new(&wasm_path);
+    let mut doc = GwbDocument::new(&wasm_path);
+
+    // GWB guests (export gwb_abi_version) run in-process on the UI thread;
+    // anything else falls back to legacy console mode (_start on a thread).
+    let mut legacy = false;
+    match abi::try_load(&wasm_path, proxy.clone()) {
+        Ok(Some(mut rt)) => {
+            rt.start(1100.0, 800.0, 1.0, 1)
+                .context("gwb_start failed")?;
+            doc.attach_guest(rt);
+        }
+        Ok(None) => legacy = true,
+        Err(e) => {
+            logger::log("crash", &format!("gwb guest load failed: {e:#}"));
+            ui::host_console_line(&proxy, &format!("[host] guest load FAILED: {e:#}"));
+        }
+    }
+
     let attrs = WindowAttributes::default()
         .with_title("GoWebBrowser")
         .with_surface_size(LogicalSize::new(1100.0, 800.0));
@@ -55,7 +73,9 @@ fn main() -> Result<()> {
     app.add_window(window);
 
     ui::host_console_line(&proxy, &format!("[host] system log: {}", log_path.display()));
-    spawn_guest(wasm_path, proxy.clone());
+    if legacy {
+        spawn_guest(wasm_path, proxy.clone());
+    }
 
     if crash_test {
         std::thread::Builder::new()

@@ -9,9 +9,12 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyrender_vello::VelloWindowRenderer;
-use blitz_dom::{DocGuard, DocGuardMut, Document, DocumentConfig};
+use blitz_dom::{
+    DocGuard, DocGuardMut, Document, DocumentConfig, EventDriver, EventHandler, NoopEventHandler,
+};
 use blitz_html::{HtmlDocument, HtmlProvider};
 use blitz_shell::{BlitzApplication, BlitzShellEvent, WindowConfig};
+use blitz_traits::events::{DomEvent, DomEventData, EventState, UiEvent};
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -52,6 +55,10 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
   #app { flex: 1 1 auto; padding: 24px; overflow-y: auto; }
   #app h1 { font-size: 22px; margin-bottom: 8px; }
   #app p { color: #9a9fa6; font-size: 14px; margin-bottom: 4px; }
+  #mount { margin-top: 20px; }
+  #mount button { padding: 8px 18px; background: #2f6feb; color: #fff; border: 1px solid #4a86f5;
+                  border-radius: 6px; font-size: 14px; cursor: pointer; }
+  #mount button:hover { background: #4a86f5; }
   #console { flex: 0 0 45%; display: flex; flex-direction: column;
              border-top: 1px solid #3a3d41; background: #161719; }
   #console-title { padding: 6px 12px; font-size: 12px; color: #9a9fa6;
@@ -71,6 +78,7 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
     <h1>GoWebBrowser</h1>
     <p>Rust renderer shell — Blitz + wasmtime, zero JavaScript.</p>
     <p>Guest module: {{GUEST}}. Its stdout/stderr stream into the console below.</p>
+    <div id="mount"></div>
   </main>
   <footer id="console">
     <div id="console-title">console — {{GUEST}}</div>
@@ -95,6 +103,9 @@ pub struct GwbDocument {
     partial_out: String,
     partial_err: String,
     dirty: bool,
+    /// GWB guest runtime + id maps (None in legacy console mode).
+    guest: Option<crate::abi::GuestRuntime>,
+    maps: crate::abi::NodeMaps,
 }
 
 impl GwbDocument {
@@ -110,6 +121,14 @@ impl GwbDocument {
             .query_selector("#console-log")
             .expect("selector parses")
             .expect("#console-log exists in shell HTML");
+        let mount_node = doc
+            .query_selector("#mount")
+            .expect("selector parses")
+            .expect("#mount exists in shell HTML");
+        let mut maps = crate::abi::NodeMaps::default();
+        // Guest id 1 = the mount root (spec: the only host node a guest can address).
+        maps.fwd.insert(1, mount_node);
+        maps.rev.insert(mount_node, 1);
         Self {
             doc,
             log_node,
@@ -117,7 +136,18 @@ impl GwbDocument {
             partial_out: String::new(),
             partial_err: String::new(),
             dirty: false,
+            guest: None,
+            maps,
         }
+    }
+
+    /// Attach a started GWB guest: apply its initial batches immediately.
+    pub fn attach_guest(&mut self, rt: crate::abi::GuestRuntime) {
+        let shared = rt.shared.clone();
+        let applied = crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+        crate::logger::log("abi", &format!("initial mount: {applied} ops applied"));
+        self.guest = Some(rt);
+        self.dirty = true;
     }
 
     pub fn push_chunk(&mut self, source: Source, bytes: &[u8]) {
@@ -199,6 +229,69 @@ impl Document for GwbDocument {
 
     fn poll(&mut self, _task_context: Option<std::task::Context<'_>>) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    fn handle_ui_event(&mut self, event: UiEvent) {
+        if let Some(rt) = self.guest.as_mut() {
+            let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
+            let mut driver = EventDriver::new(&mut self.doc, handler);
+            driver.handle_ui_event(event);
+            self.dirty = true;
+        } else {
+            let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
+            driver.handle_ui_event(event);
+        }
+    }
+}
+
+/// Routes hit-tested DOM events to the GWB guest and applies the batches the
+/// guest submits in response — the full interactive loop, inside one dispatch.
+struct GwbEventHandler<'a> {
+    rt: &'a mut crate::abi::GuestRuntime,
+    maps: &'a mut crate::abi::NodeMaps,
+    mutated: bool,
+}
+
+impl EventHandler for GwbEventHandler<'_> {
+    fn handle_event(
+        &mut self,
+        chain: &[usize],
+        event: &mut DomEvent,
+        doc: &mut dyn Document,
+        _event_state: &mut EventState,
+    ) {
+        // v0: clicks only.
+        let (kind, x, y) = match &event.data {
+            DomEventData::Click(p) => (crate::abi::ev::CLICK, p.page_x(), p.page_y()),
+            _ => return,
+        };
+
+        // Bubble host-side: nearest subscribed ancestor in the chain wins.
+        let listener = chain.iter().find_map(|nid| {
+            self.maps
+                .rev
+                .get(nid)
+                .copied()
+                .filter(|gid| self.maps.listeners.contains(&(*gid, kind)))
+        });
+        let Some(listener) = listener else { return };
+        let target = self.maps.rev.get(&event.target).copied().unwrap_or(listener);
+
+        crate::logger::log(
+            "event",
+            &format!("click -> guest (target={target} listener={listener} x={x:.0} y={y:.0})"),
+        );
+        match self.rt.deliver_click(target, listener, x, y) {
+            Ok(_flags) => {
+                let shared = self.rt.shared.clone();
+                let mut guard = doc.inner_mut();
+                let applied = crate::abi::apply_batches(&mut guard, self.maps, &shared);
+                if applied > 0 {
+                    self.mutated = true;
+                }
+            }
+            Err(e) => crate::logger::log("crash", &format!("guest event handler failed: {e:#}")),
+        }
     }
 }
 
