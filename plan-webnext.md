@@ -1,5 +1,5 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 8 — §0-§12 SHIP (6-round adversarial review); §13 WVEP newly added, under review
+### Plan draft 8 — §0-§13 SHIP; §13 WVEP passed 3-round review (2 independent SHIP verdicts)
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
@@ -1711,6 +1711,7 @@ workers, host-mediated, receipted.
     { "kind": "PAYMENT",   "amount": { "USD": "0.10" } },
     { "kind": "ATTENTION", "max_wall_s": 30 },
     { "kind": "COMPUTE",   "credits": 12, "max_cpu_ms": 90000,
+                           "worker_bundle": "b3:...",   // §2b-lifecycle, verified
                            "allow_crypto": true, "allow_useful": true },
     { "kind": "JUDGMENT",  "tasks": 3, "max_wall_s": 120 } ],
   "settlement": { "recipient": "ed:site_revenue_key" },

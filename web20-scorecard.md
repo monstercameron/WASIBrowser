@@ -259,7 +259,7 @@ open/unsolved (plan flags it) · **[R]** regression vs web · **[—]** unaddres
 |---|---|---|---|
 | Cost to publish | 8 | **8** | [S] gateway or seed |
 | Cost to consume (equity) | 4 | **8** | [S] binary + dedup + delta + cache + LAN: cheap on bad/expensive links |
-| Monetization health | 2 | **5** | [S][O] draft-6+ declares a `payments` capability (charge/subscribe, trusted-chrome, privacy-preserving micropayments) — narrows the hole, but rails/compliance/disputes are unsolved; not "closed" |
+| Monetization health | 2 | **6** | [S][O] §13 WVEP: a full browser-mediated value-exchange protocol (money/attention/compute/storage/bandwidth/judgment → signed receipts), adversarially reviewed to SHIP — structurally better than surveillance ads *and* than a bare payments capability; still rails/broker-market-bootstrap gated (honestly scoped), so not 10 |
 | Naming economics | 4 | **7** | [S][A][O] no registrars/rent, word-keytags + native-first resolution now ergonomic (adversarially validated ≥ HTTPS steady-state), but log quorum + keyed-name UX still adoption-unproven |
 | Lock-in / monopoly | 3 | **7** | [S][A] portable; but discovery could re-centralize onto gateways/search |
 | Standards / governance | 6 | **6** | [O] specs-first, but currently one author's draft, no standards body |
