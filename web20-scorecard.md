@@ -259,8 +259,8 @@ open/unsolved (plan flags it) · **[R]** regression vs web · **[—]** unaddres
 |---|---|---|---|
 | Cost to publish | 8 | **8** | [S] gateway or seed |
 | Cost to consume (equity) | 4 | **8** | [S] binary + dedup + delta + cache + LAN: cheap on bad/expensive links |
-| Monetization health | 2 | **3** | [R][—] kills surveillance ads with **no replacement** — a hole, maybe a regression for creators |
-| Naming economics | 4 | **7** | [S][A][O] no registrars/rent, but log quorum + keyed-name UX unproven |
+| Monetization health | 2 | **5** | [S][O] draft-6+ declares a `payments` capability (charge/subscribe, trusted-chrome, privacy-preserving micropayments) — narrows the hole, but rails/compliance/disputes are unsolved; not "closed" |
+| Naming economics | 4 | **7** | [S][A][O] no registrars/rent, word-keytags + native-first resolution now ergonomic (adversarially validated ≥ HTTPS steady-state), but log quorum + keyed-name UX still adoption-unproven |
 | Lock-in / monopoly | 3 | **7** | [S][A] portable; but discovery could re-centralize onto gateways/search |
 | Standards / governance | 6 | **6** | [O] specs-first, but currently one author's draft, no standards body |
 
@@ -323,3 +323,28 @@ adoption risk. If built and adopted, it dominates the dimensions that matter
 most under an adversary and over a decade. Neither "if" is close to settled,
 and an honest score is the ceiling times two discounts. The scorecard says the
 bet is worth making; it does not say it is won.
+
+## Postscript — the spec's design maturity (2026-07-06)
+
+`plan-webnext.md` was hardened through **six rounds of adversarial review**
+(hostile senior-engineer critics, findings 8 blockers → 3+9 → 3+6 → 1+1 →
+SHIP → SHIP-confirmed). Two independent final reviewers returned **SHIP**:
+easy dev sell, URL/name ergonomics judged **≥ HTTPS in steady state**, and no
+remaining blocker or major *design* hole. What that does and does not mean, honestly:
+
+- **It means the DESIGN is at its achievable ceiling** on every dimension a
+  design (not deployment) can move: naming ergonomics, verification/integrity,
+  privacy structure, capability security, offline/efficiency, the RPC + payment
+  + update models, and the honesty of its own scoping.
+- **It does NOT mean "10/10 in all dimensions" literally.** An unbuilt spec
+  cannot honestly score 10 on tooling ecosystem (4), UI-richness parity (7),
+  monetization *rails* (5), or the adoption-gated decentralization dimensions —
+  and it doesn't pretend to. The residual sub-ceilings are **adoption-gated or
+  open-research** (the §10.7 keys-must-be-human usability study, ecosystem
+  size, single implementation, payment-rail partnerships), which both final
+  reviewers explicitly ruled *non-blocking* for a ship-quality design but which
+  the reality-anchor here refuses to paper over with inflated numbers.
+
+So: the *plan* is done and defensible. The *proof* is in P0–P5 (§8) — and the
+honest scorecard still multiplies the 8.7 design ceiling by the maturity and
+adoption discounts, which only building collapses.

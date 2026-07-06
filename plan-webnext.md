@@ -1,5 +1,5 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 7 — for critique, not yet pinned
+### Plan draft 7 — SHIP per 6-round adversarial review (2 independent SHIP verdicts)
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
@@ -360,7 +360,15 @@ human — they are Tier-0 UX, not polish:
       label is **not pinned** by you, chrome shows an explicit
       *"native identity (unknown key) — NOT the legacy site amazon.com —
       [open native] [open legacy DNS]"* disambiguation. The user is never
-      silently sent to a native squat of a legacy name.
+      silently sent to a native squat of a legacy name. (Note this is why the
+      **live-DNS confirmation matters for false positives**: a legitimate
+      native chain like `google.deepmind.chat` is *also* legacy-shaped — it
+      ends in the `.chat` gTLD — but no `google.deepmind.chat` DNS record
+      exists, so with the live-DNS check the anti-hijack copy is suppressed
+      and it renders as an ordinary first-contact C4 chooser, not a squat
+      warning. The "NOT the legacy site" framing fires only when a real legacy
+      domain is actually being shadowed. Once the top label is pinned, no
+      warning shows at all.)
    The legacy-TLD table ships **inside the signed, independently-forkable
    defaults sub-objects (§1c)**, mirrors IANA on a cadence, and decides *only*
    DNS-ramp eligibility, never what is trusted (§10 R1 holds). Legacy TLD
