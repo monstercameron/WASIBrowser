@@ -309,13 +309,28 @@ runtime everywhere; UI needs Blink-class coverage; the ecosystem needs years;
 discovery needs a crawl base that doesn't exist.
 
 Two honest holes the plan should own louder:
-- **Monetization (3)** is the least-examined risk. Removing surveillance ads
-  without a replacement is not automatically a win — it can starve the
-  creators whose content made the web worth browsing. The plan has no answer;
-  it should say so plainly.
+- **Monetization** *(was the least-examined risk; draft-9 update: now 6, not
+  3 — WVEP, §13/WEB-VALUE.md, is a full browser-mediated value-exchange
+  protocol, adversarially reviewed to SHIP. Still rails/broker-bootstrap
+  gated, so not closed — but no longer a void.)*
 - **Trust legibility (7)** is a *conditional* score — it collapses to ~3 if
   the "keys must become human" UX problem (§10.7, the plan's own highest-risk
   item) isn't solved.
+
+**Draft-9 refresh (post-8-round adversarial review).** The refinement moved
+*confidence* far more than the ceiling: the design earned **2 independent SHIP
+verdicts**, and every previously-flagged hole is closed or honestly scoped.
+Per-dimension **ceiling** deltas are small — the ceilings were always the
+aspiration; refinement made them *defensible*, not higher — with one real
+raise: **Monetization 3→6** (Economics/gov category 6.5→**7.0**). Naming
+economics (7) is now adversarially validated as ≥ HTTPS steady-state;
+sovereignty/dynamic-data gained the declared `data_durability` capability
+(the formal fix for the mutable-SaaS weakness). Overall design ceiling
+**~8.7 → ~8.8**, essentially flat. **The two discounts are UNCHANGED** —
+realized-today still ≈ 2 (mostly unbuilt), and the crown-jewel regressions
+(reach, tooling 3, UI-richness 7, authoring-floor 5) are exactly what the P0
+spec-family + identity-UX study must attack. The refinement's product is a
+*defensible* platform thesis, not a shipped one.
 
 **Bottom line:** on this rubric next.0 is not "a better web." It is a
 *different bet* — trade the incumbent's latent failures for the challenger's
