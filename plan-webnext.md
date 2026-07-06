@@ -251,11 +251,34 @@ or peer serves the same hashes), DHT bootstrap (multiple hardcoded +
 user-suppliable bootstrap sets; LAN discovery works with zero bootstrap),
 even *this project* (the formats are specs first, implementation second).
 
-## 4. RPC: how apps talk to the world
+## 4. RPC: the first-class API model (not a transport detail)
 
 Pages fetching URLs is the wrong shape for apps. next.0 apps speak RPC to
 **services**, and the browser host owns the transport (the guest stays
 freestanding, sockets stay out of the sandbox — same law as `gwb.fetch`).
+
+**Method-call beats resource-document.** The REST/MVC web is an impedance
+stack: the client wants `addTask(title, priority)`, but must encode intent
+into verb+URL+headers+body, the server must decode it through routing +
+controller + serializer layers, and both sides maintain session state so
+the server knows who's asking. next.0 deletes the stack:
+
+- The client **asks the server to execute a method**: `{iface, method,
+  payload}`. No routes, no verb semantics debates, no controllers — the
+  server's API *is* its method table, and codegen from the interface schema
+  gives every language typed stubs (client) and dispatch (server).
+- **Authn is protocol-level, not app-level.** Every connection is bound to
+  the caller's app-scoped key (§1) in the Noise handshake; every call
+  arrives with cryptographic caller identity attached. There is no session
+  to establish, steal, or expire — which deletes cookies, bearer tokens,
+  token refresh, CSRF, and the login-state half of MVC in one move.
+- **Authz is one guard at the top of the method**, against a verified key:
+  `can(caller, method, args)`. The server-side pattern collapses to
+  `authz check -> business logic -> reply` — the thing backend frameworks
+  approximate with middleware pyramids.
+- **Call semantics live in the schema**, per method: idempotent (safe to
+  retry / cache), mutating (exactly-once via request ids), streaming
+  (RPC_STREAM frames). The transport enforces what REST left to convention.
 
 **The spec** (a peer of ABI.md, language-neutral):
 
