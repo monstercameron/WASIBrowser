@@ -331,10 +331,17 @@ impl Document for GwbDocument {
     }
 
     fn handle_ui_event(&mut self, event: UiEvent) {
-        if let Some(rt) = self.guest.as_mut() {
-            let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
-            let mut driver = EventDriver::new(&mut self.doc, handler);
-            driver.handle_ui_event(event);
+        if self.guest.is_some() {
+            {
+                let rt = self.guest.as_mut().unwrap();
+                let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
+                let mut driver = EventDriver::new(&mut self.doc, handler);
+                driver.handle_ui_event(event);
+            }
+            // Post-dispatch: apply everything the guest submitted during the
+            // dispatch, now that the driver no longer holds node chains.
+            let shared = self.guest.as_ref().unwrap().shared.clone();
+            crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
             self.dirty = true;
             self.check_observations();
         } else {
@@ -381,6 +388,11 @@ impl EventHandler for GwbEventHandler<'_> {
                 &format!("{} -> guest (target={target} listener={listener})", event.name()),
             );
         }
+        // ABI law: batches submitted during dispatch are applied AFTER the
+        // event driver finishes (see handle_ui_event) — mutating the tree
+        // mid-dispatch invalidates the driver's node chain (learned the hard
+        // way: Remove mid-chain panicked blitz-dom node.rs:1119).
+        let _ = doc;
         match self.rt.deliver_event(&eo, record_flags, target, listener) {
             Ok(flags) => {
                 if preventable && flags & 1 != 0 {
@@ -389,10 +401,7 @@ impl EventHandler for GwbEventHandler<'_> {
                 if flags & 2 != 0 {
                     event_state.stop_propagation();
                 }
-                let shared = self.rt.shared.clone();
-                let mut guard = doc.inner_mut();
-                let applied = crate::abi::apply_batches(&mut guard, self.maps, &shared);
-                if applied > 0 {
+                if !self.rt.shared.lock().unwrap().batches.is_empty() {
                     self.mutated = true;
                     event.request_redraw = true;
                 }
