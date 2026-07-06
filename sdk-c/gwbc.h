@@ -279,14 +279,19 @@ static char *gwbc_use_str(const char *name, const char *initial) {
     if (fresh) { u32 i = 0; while (initial[i] && i < 127) { s->v_str[i] = initial[i]; i++; } s->v_str[i] = 0; s->kind = 1; }
     return s->v_str;
 }
+/* forward decl: setters flag the effect re-render loop */
+static u8 gc_state_dirtied;
+
 static void gwbc_set_i32(const char *name, i32 v) {
     GcState *s = gc_slot(name);
     if (s->v_i32 != v) { s->prev_i32 = s->v_i32; s->has_prev = 1; }
     s->v_i32 = v;
+    gc_state_dirtied = 1;
 }
 static void gwbc_set_str(const char *name, const char *v) {
     GcState *s = gc_slot(name);
     u32 i = 0; while (v[i] && i < 127) { s->v_str[i] = v[i]; i++; } s->v_str[i] = 0;
+    gc_state_dirtied = 1;
 }
 static PreviousI32 gwbc_use_previous_i32(const char *name, i32 current) {
     (void)current;
@@ -326,6 +331,134 @@ static Node gc_on(Handler h, u16 kind) {
  * the default action; Stop halts propagation. Composable. */
 static Handler Prevent(Handler h) { gc_handler_ret[h] |= 1; return h; }
 static Handler Stop(Handler h) { gc_handler_ret[h] |= 2; return h; }
+
+/* --------------------------------------------------------------- effects
+ * useEffect: after-COMMIT side-effect hook. Render records it (commit pass
+ * only — the settle pass ignores effects), the framework runs it after the
+ * tree is applied. Keyed identity (like state), not call-order identity.
+ *
+ *   flow: render records -> commit applies tree -> cleanups -> runs
+ *   deps: u64 fingerprints — deps0() mount-once, depsI32/depsPtr/depsStr,
+ *         deps2(a, b) to combine. Change -> cleanup(old ctx) + run(new ctx).
+ *   unmount: a key not seen during a commit render is cleaned up + retired.
+ *   userdata: COPIED into effect-owned storage (never a live stack pointer):
+ *     useEffectCtx("k", run, cleanup, ((Ctx){ .a = 1 }), depsI32(x));
+ *   Effects may set() state: the commit loop re-renders (bounded) until
+ *   settled. Division of labor: useQuery = server data; useEffect =
+ *   subscriptions/timers/imperative sync; state = local; events = input.
+ */
+typedef u64 Deps;
+typedef void (*EffectFn)(void *userdata);
+
+static Deps gc_deps_mix(u64 h, u64 v) {
+    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+    return h;
+}
+static Deps deps0(void) { return 0x9E3779B97F4A7C15ull; }
+static Deps depsI32(i32 v) { return gc_deps_mix(deps0(), (u64)(u32)v); }
+static Deps depsPtr(const void *p) { return gc_deps_mix(deps0(), (u64)(unsigned long)p); }
+static Deps depsStr(const char *s) {
+    u64 h = 1469598103934665603ull;
+    while (s && *s) h = (h ^ (u8)*s++) * 1099511628211ull;
+    return h;
+}
+static Deps deps2(Deps a, Deps b) { return gc_deps_mix(a, b); }
+
+#define GWBC_MAX_EFFECTS 32
+#define GWBC_EFFECT_CTX 64
+
+typedef struct {
+    const char *key;
+    Deps deps;
+    EffectFn run, cleanup;
+    u8 inited, seen, pendingRun, pendingCleanup;
+    EffectFn oldCleanup;
+    char ctx[GWBC_EFFECT_CTX];
+    u32 ctxLen;
+    char oldCtx[GWBC_EFFECT_CTX];
+    u32 oldCtxLen;
+} GcEffect;
+
+static GcEffect gc_effects[GWBC_MAX_EFFECTS];
+static u32 gc_effect_count;
+static u8 gc_committing;      /* effects record only during the commit pass */
+static u8 gc_state_dirtied;   /* set() ran (drives the effect re-render loop) */
+
+static void gwbc_use_effect(const char *key, EffectFn run, EffectFn cleanup,
+                            const void *ctx, u32 ctxLen, Deps deps) {
+    if (!gc_committing) return;
+    if (ctxLen > GWBC_EFFECT_CTX) gwbc_panic("gwbc: effect ctx too big (GWBC_EFFECT_CTX)");
+
+    GcEffect *e = 0;
+    for (u32 i = 0; i < gc_effect_count; i++)
+        if (gc_streq(gc_effects[i].key, key)) { e = &gc_effects[i]; break; }
+    if (!e) {
+        if (gc_effect_count >= GWBC_MAX_EFFECTS) gwbc_panic("gwbc: effect registry full");
+        e = &gc_effects[gc_effect_count++];
+        e->key = key;
+        e->inited = 0;
+    }
+    e->seen = 1;
+
+    if (!e->inited) {
+        e->inited = 1;
+        e->deps = deps;
+        e->run = run;
+        e->cleanup = cleanup;
+        e->ctxLen = ctxLen;
+        for (u32 i = 0; i < ctxLen; i++) e->ctx[i] = ((const char *)ctx)[i];
+        e->pendingRun = 1;
+        return;
+    }
+    if (e->deps != deps) {
+        /* cleanup must see the OLD context */
+        e->pendingCleanup = e->cleanup != 0;
+        e->oldCleanup = e->cleanup;
+        e->oldCtxLen = e->ctxLen;
+        for (u32 i = 0; i < e->ctxLen; i++) e->oldCtx[i] = e->ctx[i];
+
+        e->deps = deps;
+        e->run = run;
+        e->cleanup = cleanup;
+        e->ctxLen = ctxLen;
+        for (u32 i = 0; i < ctxLen; i++) e->ctx[i] = ((const char *)ctx)[i];
+        e->pendingRun = 1;
+    }
+}
+
+#define useEffect(key, run, cleanup, deps) gwbc_use_effect(key, run, cleanup, 0, 0, deps)
+/* ctx is an lvalue or compound literal; it is COPIED (stack-safe). */
+#define useEffectCtx(key, run, cleanup, ctxVal, deps) \
+    gwbc_use_effect(key, run, cleanup, &(ctxVal), sizeof(ctxVal), deps)
+
+static void gc_run_effects(void) {
+    /* 1) unmount: initialized effects whose key wasn't seen this commit */
+    for (u32 i = 0; i < gc_effect_count; i++) {
+        GcEffect *e = &gc_effects[i];
+        if (e->inited && !e->seen) {
+            if (e->cleanup) e->cleanup(e->ctxLen ? e->ctx : 0);
+            e->inited = 0;
+            e->pendingRun = 0;
+            e->pendingCleanup = 0;
+        }
+    }
+    /* 2) cleanups from deps changes (old context) */
+    for (u32 i = 0; i < gc_effect_count; i++) {
+        GcEffect *e = &gc_effects[i];
+        if (e->pendingCleanup) {
+            e->pendingCleanup = 0;
+            if (e->oldCleanup) e->oldCleanup(e->oldCtxLen ? e->oldCtx : 0);
+        }
+    }
+    /* 3) runs */
+    for (u32 i = 0; i < gc_effect_count; i++) {
+        GcEffect *e = &gc_effects[i];
+        if (e->pendingRun) {
+            e->pendingRun = 0;
+            e->run(e->ctxLen ? e->ctx : 0);
+        }
+    }
+}
 
 /* ------------------------------------------------------------ query cache
  * React-Query-shaped async: useQuery(key, url) never blocks — it returns the
@@ -583,10 +716,26 @@ static i32 renderCount(void) { return gc_commit_count; }
 static void gc_render_clean(void) {
     gc_arena_reset();
     gc_commit_count++;
+    for (u32 i = 0; i < gc_effect_count; i++) gc_effects[i].seen = 0;
+    gc_committing = 1;
     Node tree = gwb__root();
+    gc_committing = 0;
     gwb_clear(gc_container);
     gc_emit(tree.idx, gc_container);
     if (gc_css_dirty) gc_emit_stylesheet();
+}
+
+/* Commit + effects loop: effects run after the tree is applied; if an
+ * effect set() state, re-render (bounded) until settled. */
+static void gc_commit_cycle(void) {
+    for (i32 gc__it = 0; gc__it < 3; gc__it++) {
+        gc_render_clean();
+        gwb_flush();
+        gc_state_dirtied = 0;
+        gc_run_effects();
+        if (!gc_state_dirtied) break;
+    }
+    gwb_flush(); /* ops emitted directly by effects */
 }
 
 static void gwbc_render(void) {
@@ -608,8 +757,8 @@ static void gwbc_render(void) {
         gc_active_handler = 0xFFFFFFFF;
         gc_event_value = "";
 
-        /* Pass 2: clean render with settled state. */
-        gc_render_clean();
+        /* Pass 2: clean render with settled state, then effects. */
+        gc_commit_cycle();
         /* Full replace destroyed the focused input; re-focus its successor. */
         if (refocus_kind == GWB_EV_INPUT) {
             for (u32 i = 0; i < gc_hn_count; i++) {
@@ -620,7 +769,7 @@ static void gwbc_render(void) {
             }
         }
     } else {
-        gc_render_clean();
+        gc_commit_cycle();
     }
     gwb_flush();
 }

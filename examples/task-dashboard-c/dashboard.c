@@ -407,6 +407,27 @@ typedef struct {
     const char *title;
 } DashboardAppProps;
 
+/* ---- effects: run AFTER commit, never during render ---- */
+
+static void onDashboardMount(void *ud) {
+    (void)ud;
+    logf("[effect] dashboard mounted (committed renders: %d)", renderCount());
+}
+
+typedef struct {
+    TaskFilter filter;
+} FilterFxCtx;
+
+static void onFilterApplied(void *ud) {
+    FilterFxCtx *c = ud;
+    logf("[effect] filter effect: now syncing \"%s\"", Filter_Label(c->filter));
+}
+
+static void onFilterLeave(void *ud) {
+    FilterFxCtx *c = ud; /* cleanup sees the OLD context */
+    logf("[effect] filter cleanup: leaving \"%s\"", Filter_Label(c->filter));
+}
+
 component(DashboardApp, props, DashboardAppProps) {
     stateStruct(TaskStore, store, TaskStore_Init);
     stateStr(draftTitle, "");
@@ -417,6 +438,13 @@ component(DashboardApp, props, DashboardAppProps) {
 
     /* Derived business data (recomputed each render; events ran already). */
     TaskStats stats = TaskStore_Stats(store);
+
+    /* Effects: recorded during the commit pass, executed after the tree is
+     * applied. Mount-once, and re-run on filter change (cleanup gets the
+     * previous filter's context). */
+    useEffect("dash-mount", onDashboardMount, 0, deps0());
+    useEffectCtx("filter-sync", onFilterApplied, onFilterLeave,
+        ((FilterFxCtx){ .filter = filter }), depsI32((i32)filter));
 
     eventInput(updateDraftTitle, e) {
         logf("[dashboard] draft title -> \"%s\"", e.value);
