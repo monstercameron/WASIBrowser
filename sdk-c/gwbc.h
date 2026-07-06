@@ -30,6 +30,11 @@
  * is just passing more of them. Not yet ported from Go: Repeat/Join (need
  * node cloning), FlatMap/FilterMap/Switch/Cond, Debounce/Throttle.
  *
+ * RENDER MODEL: each interaction runs the component function TWICE — a settle
+ * pass (event bodies execute, set()s land) then the committed render. The DOM
+ * is replaced once. Event bodies run exactly once; component-body side
+ * effects run twice. Use renderCount() for committed-render counts.
+ *
  * Model: immediate mode + full replace. Every event re-renders the whole tree
  * (two passes: handlers run, then a clean render) and replaces the mount's
  * children. Utility tokens dedupe into one generated <style> sheet: the first
@@ -484,8 +489,17 @@ static void gc_arena_reset(void) {
     (void)gc_alloc(K_EMPTY);
 }
 
+static i32 gc_commit_count;
+/* Committed renders (one per interaction + the initial mount). NOTE: the
+ * component FUNCTION runs twice per interaction — a settle pass that executes
+ * event bodies, then the committed render. Keep side effects (counters, logs,
+ * business mutations) inside event bodies, which run exactly once; use
+ * renderCount() instead of hand-rolled statics in component bodies. */
+static i32 renderCount(void) { return gc_commit_count; }
+
 static void gc_render_clean(void) {
     gc_arena_reset();
+    gc_commit_count++;
     Node tree = gwb__root();
     gwb_clear(gc_container);
     gc_emit(tree.idx, gc_container);

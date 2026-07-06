@@ -14,8 +14,8 @@ use blitz_dom::{
 };
 use blitz_html::{HtmlDocument, HtmlProvider};
 use blitz_shell::{BlitzApplication, BlitzShellEvent, WindowConfig};
-use blitz_traits::events::{BlitzImeEvent, DomEvent, EventState, UiEvent};
-use keyboard_types::Modifiers;
+use blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, DomEvent, EventState, KeyState, UiEvent};
+use keyboard_types::{Code, Key, Location, Modifiers};
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -144,11 +144,47 @@ impl GwbDocument {
 
     /// Attach a started GWB guest: apply its initial batches immediately.
     pub fn attach_guest(&mut self, rt: crate::abi::GuestRuntime) {
-        let shared = rt.shared.clone();
-        let applied = crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
-        crate::logger::log("abi", &format!("initial mount: {applied} ops applied"));
         self.guest = Some(rt);
+        let applied = self.apply_guest_batches();
+        crate::logger::log("abi", &format!("initial mount: {applied} ops applied"));
         self.dirty = true;
+    }
+
+    /// Apply everything the guest submitted; if a Focus op landed on a text
+    /// input, move the caret to the end via a synthetic End keypress (the
+    /// replace-render recreates inputs with the caret at 0, which made
+    /// typing insert backwards).
+    fn apply_guest_batches(&mut self) -> usize {
+        let Some(rt) = self.guest.as_ref() else { return 0 };
+        let shared = rt.shared.clone();
+        let (applied, focused) = crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+        if let Some(nid) = focused {
+            self.caret_to_end(nid);
+        }
+        applied
+    }
+
+    fn caret_to_end(&mut self, nid: usize) {
+        let is_text_input = self
+            .doc
+            .get_node(nid)
+            .and_then(|n| n.element_data())
+            .is_some_and(|el| el.text_input_data().is_some());
+        if !is_text_input {
+            return;
+        }
+        let key = BlitzKeyEvent {
+            key: Key::End,
+            code: Code::End,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: None,
+        };
+        let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
+        driver.handle_ui_event(UiEvent::KeyDown(key));
     }
 
     /// Record the winit window id so request_frame can wake the event loop.
@@ -174,8 +210,7 @@ impl GwbDocument {
         }
         match rt.deliver_event(&eo, 0, 1, 1) {
             Ok(_) => {
-                let shared = rt.shared.clone();
-                if crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared) > 0 {
+                if self.apply_guest_batches() > 0 {
                     self.dirty = true;
                 }
             }
@@ -208,8 +243,7 @@ impl GwbDocument {
                 let mut driver = EventDriver::new(&mut self.doc, handler);
                 driver.handle_dom_event(event);
             }
-            let shared = self.guest.as_ref().unwrap().shared.clone();
-            crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+            self.apply_guest_batches();
             self.dirty = true;
             self.check_observations();
         } else {
@@ -217,10 +251,11 @@ impl GwbDocument {
             driver.handle_dom_event(event);
         }
         // The pointer-down default (focus-on-click) didn't run; emulate it so
-        // `click #input` + `type ...` composes naturally.
+        // `click #input` + `type ...` composes naturally (caret at end).
         if is_input {
             if let Some(nid) = self.resolve(selector) {
                 self.doc.set_focus_to(nid);
+                self.caret_to_end(nid);
             }
         }
         true
@@ -311,8 +346,7 @@ impl GwbDocument {
                 crate::logger::log("crash", &format!("observation delivery failed: {e:#}"));
             }
         }
-        let shared = rt.shared.clone();
-        let applied = crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+        let applied = self.apply_guest_batches();
         if applied > 0 {
             self.dirty = true;
         }
@@ -412,8 +446,7 @@ impl Document for GwbDocument {
                 if let Err(e) = rt.deliver_frame(dt) {
                     crate::logger::log("crash", &format!("gwb_frame failed: {e:#}"));
                 }
-                let shared = rt.shared.clone();
-                if crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared) > 0 {
+                if self.apply_guest_batches() > 0 {
                     dirty = true;
                 }
             }
@@ -435,8 +468,7 @@ impl Document for GwbDocument {
             }
             // Post-dispatch: apply everything the guest submitted during the
             // dispatch, now that the driver no longer holds node chains.
-            let shared = self.guest.as_ref().unwrap().shared.clone();
-            crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+            self.apply_guest_batches();
             self.dirty = true;
             self.check_observations();
         } else {

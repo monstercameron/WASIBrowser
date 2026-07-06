@@ -344,9 +344,6 @@ typedef struct {
     const char *title;
 } DashboardAppProps;
 
-/* Plain-C escape hatch for demo purposes: counts every render pass. */
-static i32 gRenderPasses;
-
 component(DashboardApp, props, DashboardAppProps) {
     stateStruct(TaskStore, store, TaskStore_Init);
     stateStr(draftTitle, "");
@@ -354,8 +351,6 @@ component(DashboardApp, props, DashboardAppProps) {
     stateEnum(TaskFilter, filter, FilterAll);
     stateI32(lastChangedTaskId, 0);
     previousI32(previousFilter, filter);
-
-    gRenderPasses++;
 
     /* Derived business data (recomputed each render; events ran already). */
     TaskStats stats = TaskStore_Stats(store);
@@ -436,7 +431,7 @@ component(DashboardApp, props, DashboardAppProps) {
                         text("%d high-priority task(s) still open.", stats.highPriorityOpen))),
 
                 DebugPanel(Props(DebugPanelProps,
-                    .renderCount = gRenderPasses,
+                    .renderCount = renderCount(),
                     .lastChangedTaskId = lastChangedTaskId,
                     .previousFilter = previousFilter.ok
                         ? (TaskFilter)previousFilter.value

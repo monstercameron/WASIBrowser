@@ -208,15 +208,16 @@ fn html_name(name: &str) -> QualName {
     QualName::new(None, ns!(html), LocalName::from(name))
 }
 
-/// Drain all pending batches into the document. Returns number of ops applied.
+/// Drain all pending batches into the document. Returns (ops applied,
+/// blitz node focused by a Focus op — the caller should fix the caret).
 pub fn apply_batches(
     doc: &mut BaseDocument,
     maps: &mut NodeMaps,
     shared: &Arc<Mutex<Shared>>,
-) -> usize {
+) -> (usize, Option<usize>) {
     let mut guard = shared.lock().unwrap();
     if guard.batches.is_empty() {
-        return 0;
+        return (0, None);
     }
     let batches = std::mem::take(&mut guard.batches);
 
@@ -341,7 +342,7 @@ pub fn apply_batches(
         doc.set_focus_to(n);
     }
     crate::logger::log("abi", &format!("applied {applied} ops from {} batch(es)", batches.len()));
-    applied
+    (applied, focus_target)
 }
 
 // ---------------------------------------------------------------- guest runtime
