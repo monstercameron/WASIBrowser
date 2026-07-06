@@ -1,5 +1,5 @@
 # WebNext — the overview & manifesto (for WASIBrowser)
-### Plan draft 10 — SHIP + formalization pass (constitution, C/D/V/U ladders, WVEP threat model, acceptance contracts, spec-family scaffold). §0-§20.
+### Plan draft 11 — SHIP + accept/beat pass (personas, dev-ergonomics-proven, C-ladder chips, attack-success UX gate, privacy tests). §0-§21.
 
 *(Naming: **WebNext** is the product/protocol; **"next.0"** is the protocol
 generation, not the label. WASIBrowser is the reference runtime.)*
