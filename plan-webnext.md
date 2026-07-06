@@ -1,5 +1,5 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 5 — for critique, not yet pinned
+### Plan draft 6 — for critique, not yet pinned
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
@@ -115,11 +115,14 @@ concrete on-ramps instead of "install our browser or leave":
    could clickjack. So: same verification, same C0–C4 ladder shown honestly,
    fewer capabilities executable — §10.6's "trusted chrome is sacred" is
    honored by *withholding capabilities that need it*, never by faking it.
-   **Tradeoff a commercial dev must plan for:** since payments are
-   native-only, a monetized app's extension-mode experience is necessarily
-   read/preview-only — the extension buys reach for the *free* funnel, the
-   native install unlocks the *paid* one (stated so no one is surprised after
-   building; see §4a).
+   **Tradeoff a dev must plan for:** the native-only cap covers *every*
+   capability needing trusted chrome — payments (§4a) **and**
+   identity-sharing / private-profile grants — so both a monetized funnel
+   (Flow 2) *and* a private-social flow (Flow 3's friends-only posts) are
+   extension-preview-only, unlocking on native install. The extension buys
+   reach for public, free, read-mostly content; the paid and private surfaces
+   are the native install's job. Stated so no one is surprised after building
+   (see §4a, §9, and the `host.trust_tier` signal below).
    *Host-detection for graceful degradation:* the host exposes a read-only
    `host.trust_tier` (native | extension) so an app can adapt its own UI —
    hide the pay button and show "open in WASIBrowser to purchase" under the
@@ -331,22 +334,36 @@ human — they are Tier-0 UX, not polish:
    dictionary words the keyboard auto-completes, and the browser normalizes
    spacing/casing — the word/label boundary is the `~` (or the first
    dictionary word), never ambiguous run-on.
-5. **Legacy `dns:` resolves silently — and legacy TLDs are RESERVED from
-   native claiming.** Typing a bare dotted string (`amazon.com`) whose final
-   label is in the browser's legacy-TLD table is resolved via `dns:`,
-   shown labeled **"legacy web (DNS)"**, never confused with a native
-   identity. Critically, to prevent a hijack — an attacker claiming native
-   top-label `com`, then signing a delegated `amazon` child to intercept
-   `amazon.com` before the ramp is tried — **every string in the legacy-TLD
-   table is reserved: `com`/`org`/`net`/`io`/… cannot be claimed as a native
-   top label at all (§1b claim validation rejects them).** So a dotted string
-   ending in a reserved TLD has *no* valid native chain to shadow it and
-   always routes to `dns:`; §1b's "native and legacy cannot collide" holds by
-   construction, not by resolution-order luck. The table itself is not a
-   private vendor list — it ships **inside the signed, forkable defaults
-   bundle (§1c)**, versioned and auditable like the other three lists, and it
-   decides *only* the reserved set + DNS-ramp eligibility, never what is
-   trusted (§10 R1 still holds).
+5. **Legacy `dns:` resolves silently — NATIVE-FIRST, never final-label
+   routing.** The disambiguator can't be the final label: root-left native
+   `google.deepmind.chat` ends in `chat`, a live gTLD, and root-right legacy
+   `www.amazon.com` ends in `com` — keying on the last label would misroute
+   every native chain whose leaf happens to be a common word (`chat`, `app`,
+   `dev`, `shop`…). So resolution is **native-first**:
+   1. Resolve the string as a native chain (root-left, §1d). If its **top
+      (leftmost) label has a valid quorum-claimed identity** and the chain
+      resolves, it's native — subject to the C0–C4 ladder (an unpinned top
+      label is C4 = a chooser, never a silent destination, §10.3).
+   2. If native resolution fails (top label unclaimed, or chain broken) *and*
+      the string's final label is in the legacy-TLD table, fall to **`dns:`**,
+      shown labeled **"legacy web (DNS)."** So `amazon.com` (nobody claims
+      native `amazon`) lands on the legacy site; `google.deepmind.chat`
+      (`google` claimed) resolves native — both correct.
+   3. **Anti-hijack (the real one):** an attacker claiming native top-label
+      `amazon` and delegating a child `com` *would* make `amazon.com` resolve
+      natively and shadow the legacy site. That is caught, not silent: when a
+      native chain's serialization also parses as a live legacy domain and its
+      top label is **not pinned** by you, chrome shows an explicit
+      *"native identity (unknown key) — NOT the legacy site amazon.com —
+      [open native] [open legacy DNS]"* disambiguation. The user is never
+      silently sent to a native squat of a legacy name.
+   The legacy-TLD table ships **inside the signed, independently-forkable
+   defaults sub-objects (§1c)**, mirrors IANA on a cadence, and decides *only*
+   DNS-ramp eligibility, never what is trusted (§10 R1 holds). Legacy TLD
+   strings are still barred from being claimed as *native top labels* (so no
+   one registers `com` as an app), but native *leaf* labels may freely be any
+   word — the ergonomics of naming a leaf `chat`/`app` survive, because
+   routing is native-first, not final-label.
 
 > Net: users type what they always typed (`amazon.com` still works), share a
 > speakable pinned form (`cam~blue-otter-cedar`), and never hand-copy a hash. The
@@ -406,22 +423,24 @@ web://cam/todos/today          if cam's manifest is a DIRECTORY (below),
                                "todos" selects the app, rest is its route
 ```
 
-- **No TLDs — and both legacy TLDs and keytag-shaped strings are reserved.**
-  TLDs exist to shard registry databases; delegation (§1d) shards by key
-  instead, so `.com` dies with the registrar. A bare top label (`google`) is
-  a §1b claim; a dotted path (`google.deepmind`) is a delegation chain (§1d);
-  a dotted string ending in a legacy TLD routes to `dns:` (§1a rule 5).
-  **Claim validation rejects two reserved string-classes at claim time:**
-  (a) any top-label in the legacy-TLD reserved set (`com`/`org`/`net`/`io`/…)
-  — so no native chain can shadow a legacy domain; and (b) **any string
-  matching the keytag word-pattern** (hyphen-joined dictionary words, e.g.
-  `blue-otter-cedar`) — so nobody can register a bare name that is visually
-  identical to someone's `~keytag` minus the tilde. Without (b), a
-  dropped-tilde or chat-app-mangled link (`cam~blue-otter-cedar` →
-  `cam blue-otter-cedar` → a claimed bare `blue-otter-cedar`) would land on a
-  hostile squat instead of erroring — a confusable class the old hex tags
-  couldn't have (nobody types hex as a name), closed the same way TLDs are.
-  Native/legacy *and* name/keytag collisions are impossible by construction.
+- **No TLDs — legacy names resolve native-first, and keytag-shaped strings
+  are reserved.** TLDs exist to shard registry databases; delegation (§1d)
+  shards by key instead, so `.com` dies with the registrar. A bare top label
+  (`google`) is a §1b claim; a dotted path (`google.deepmind.chat`) is a
+  delegation chain (§1d). Legacy `amazon.com` is preserved by **native-first
+  resolution** (§1a rule 5), not by final-label routing — native leaf labels
+  may be any word (including `chat`/`app`/`dev`). **Claim validation reserves
+  two string-classes at claim time:** (a) legacy TLD strings as native *top*
+  labels (so no one registers `com` as an app; the anti-hijack for
+  `amazon.com` itself is the native-first + collision-disambiguation of §1a
+  rule 5, not this reservation); and (b) **any string matching the keytag
+  word-pattern** (hyphen-joined dictionary words, e.g. `blue-otter-cedar`) —
+  so nobody can register a bare name visually identical to someone's `~keytag`
+  minus the tilde. Without (b), a dropped-tilde or chat-app-mangled link
+  (`cam~blue-otter-cedar` → `cam blue-otter-cedar` → a claimed bare
+  `blue-otter-cedar`) would land on a hostile squat instead of erroring — a
+  confusable class the old hex tags couldn't have. Name/keytag collision is
+  impossible by construction; native/legacy is disambiguated by native-first.
 - **One claim, many apps.** A name binds to one key; that key's manifest
   declares `kind: app` **or** `kind: directory`. A directory is a signed map
   of sub-apps (`todos -> b3:…, blog -> b3:…`) selected by the first path
@@ -509,6 +528,19 @@ web://os/tetris           that governs how names WITHIN it are allocated
   no fixed TLD list to auction and no scarcity to corner — if a namespace
   governs badly, communities fork it, exactly like the log operators. No
   namespace is a monopoly.
+- **Resolution: a namespace is a `kind: directory` (§1b) with a policy gate,
+  not a new grammar case.** `web://nyc/hall` walks the *same* path as any
+  directory: resolve `nyc` → its signed directory manifest → look up the
+  first path segment `hall` → get the target authority (`hall`'s own
+  `ed:`/`b3:`) → resolve that directly; anything after (`nyc/hall/room/5`) is
+  `hall`'s own route. The only thing "namespace" adds over a plain directory
+  is *how entries get admitted*: nyc's policy (location attestation, etc.)
+  gates admission at claim time, versus a plain directory the owner fills
+  freely. At *fetch* time it's identical directory indirection — so there is
+  no third resolution algorithm, and `nyc` publishing "a policy + governance
+  keys" IS its directory manifest (policy in the header, admitted entries in
+  the map). `hall` is a real independent identity nyc *admitted*, not a name
+  nyc *owns*.
 - **Policies vary by community, which is where equity lives**: geographic
   (`nyc`, allocation gated on location attestation), professional (`md`,
   gated on a credential attestation), open (`os`, pure FCFS-within, still
@@ -544,12 +576,17 @@ default_rank(claim) = w1·petname_import_frequency   (how many books pin it)
 
 The **legacy-TLD sub-object mirrors IANA's root zone + pending-delegation
 set** on a defined cadence (tracking *applied-for* gTLDs, not just live ones,
-so the reservation leads go-live and closes the race window). Retroactive
-reservation **grandfathers** any prior native claim — safe because dns-routing
-keys on a string's *final* label while native claim-blocking keys on its *top*
-label: a grandfathered native top-label `zip` only affects `zip.*` native
-addresses, never `*.zip` legacy ones, so it can't shadow the eventual gTLD.
-Any user or community swaps any sub-object in one action; a fork ships its own.
+so the reservation leads go-live). It only affects (a) which strings are
+barred as native *top* labels and (b) DNS-ramp eligibility in the native-first
+fallback (§1a rule 5) — it does **not** reserve gTLD strings from being native
+*leaf* labels, so `google.deepmind.chat` stays valid even after `.chat`
+delegates. Because resolution is native-first (not final-label), a new gTLD
+going live never retroactively breaks an existing native chain: the chain
+still resolves as long as its top label is claimed; the gTLD only changes
+whether an *unclaimed*, legacy-shaped string falls through to `dns:`. So there
+is no grandfather/revoke dilemma — new gTLDs are additive to the ramp set, not
+destructive to native names. Any user or community swaps any sub-object in one
+action; a fork ships its own.
 Residual soft power of "the default most never change" is real and stated
 (§7.1) — but four specified, auditable, independently-forkable defaults beat
 one unspecified monolith.

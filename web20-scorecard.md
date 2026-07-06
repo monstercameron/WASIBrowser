@@ -197,7 +197,7 @@ open/unsolved (plan flags it) · **[R]** regression vs web · **[—]** unaddres
 |---|---|---|---|
 | Zero-install access | 10 | **8** | [R][A] runs like a link, offline relaunch — but needs *its own runtime* installed; the web needs none |
 | Cross-platform reach | 9 | **8** | [S][X] wasm is portable; the renderer must be ported per platform; mobile unproven |
-| Addressability | 6 | **9** | [S] content addresses never rot — a structural fix |
+| Addressability | 6 | **9** | [S] `b3:`/`ed:` addresses never rot — structural; delegation-chain names depend on native-first resolution + the log quorum (slightly less absolute than a raw hash) |
 | Discoverability | 7 | **6** | [A][O] no crawl base; indexing a content-addressed web is genuinely harder |
 | Accessibility | 6 | **6** | [X] AccessKit hooks exist, but decades behind ARIA maturity |
 | Internationalization | 7 | **6** | [O] ascii-only names v1; IDN explicitly deferred |
