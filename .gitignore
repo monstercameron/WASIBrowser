@@ -1,3 +1,15 @@
+# Rust build output
 target/
+
+# Wasm build artifacts (guests are compiled from examples/ and sdk-*)
+# cmd/run/app.wasm is kept: it is embedded via //go:embed at build time.
+*.wasm
+!cmd/run/app.wasm
 *.wasm.d
 
+# Native build artifacts
+*.exe
+*.dll
+*.pdb
+*.obj
+*.lib

@@ -1,6 +1,6 @@
-# WEB-VALUE.md — WVEP: Browser-Mediated Value Exchange (Proof-of-Value)
+# 08-WEB-VALUE.md — WVEP: Browser-Mediated Value Exchange (Proof-of-Value)
 
-### Extracted from plan-webnext.md §13 (the overview/manifesto index). A
+### Extracted from 00-WEBNEXT-OVERVIEW.md §13 (the overview/manifesto index). A
 ### standalone spec because WVEP is both a protocol and an abuse magnet
 ### (financial fraud, cryptojacking, labor exploitation, bandwidth/storage
 ### abuse, sponsor tracking, broker collusion, receipt fraud, fingerprinting)

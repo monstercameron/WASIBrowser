@@ -4,15 +4,15 @@
 ### distribution** half of naming (the transparency-log substrate §1b/§1c only
 ### gestured at). The rest of the naming model — the four address forms, the
 ### native-first resolution algorithm, keytag word-encoding, delegation, and the
-### DNS-legacy ramp — is designed in `../plan-webnext.md` §1/§1a–§1d and is P0
+### DNS-legacy ramp — is designed in `../00-WEBNEXT-OVERVIEW.md` §1/§1a–§1d and is P0
 ### extraction into this same doc. Enforces Constitution rules 1, 2, 4, 7, 8.
 
-## How this reconciles with plan-webnext.md §1 (read this first)
+## How this reconciles with 00-WEBNEXT-OVERVIEW.md §1 (read this first)
 
 This doc does **not** introduce a new naming model — it specifies the *mechanism*
 behind the one already in §1. The mapping is exact:
 
-| plan-webnext.md §1 term | This doc's mechanism |
+| 00-WEBNEXT-OVERVIEW.md §1 term | This doc's mechanism |
 |---|---|
 | "federated quorum of mutually-auditing logs" (§1a/§1b) | **Claim Log Nodes** (§4.x here) — CT-style append-only Merkle logs |
 | "native-first resolution" (§1a rule, §1c ranking) | The **ResolverPolicy** ranking (§2.6) — `local_petname` + `user_history` outrank every network signal, so pins/history always win first |

@@ -20,7 +20,7 @@ speculation.
 > layout, tracker, and status live in **`docs/README.md`** (single source of
 > truth; §20 mirrors it). In brief: `docs/NN-WEB-*.md`, twelve specs
 > (00-OVERVIEW … 12-WEB-DATA), all under `docs/`, numerically prefixed.
-> `docs/WEB-VALUE.md` (08) is written; `docs/01-WEB-SECURITY.md` is a stub; the
+> `docs/08-WEB-VALUE.md` (08) is written; `docs/01-WEB-SECURITY.md` is a stub; the
 > rest are P0 extraction targets. **§5's content splits at extraction:**
 > identity-unlinkability → `01-WEB-SECURITY`, oblivious-fetch/relay tiers →
 > `07-WEB-SWARM`.
@@ -109,7 +109,7 @@ end-to-end in §9's three flows.)
 
 1. **Runtime layer** — the WASM-first browser/app runtime: binary DOM ABI,
    host capabilities, storage, events, permissions, RPC host. *Mostly built
-   — see README.md / plan-blitz.md.*
+   — see README.md / PLAN-BLITZ.md.*
 2. **Sovereign-app layer** — apps as signed, content-addressed bundles:
    `b3:` immutable apps, `ed:` publisher identity, lifecycle, offline
    relaunch, delta updates, local + compile cache. *This plan, phases P1–P2.*
@@ -1294,7 +1294,7 @@ per-app privacy profiles (§11).
   third-party scripts) and the strictest-sandbox COMPUTE worker + Value
   Session + greed ledger; then STORAGE/BANDWIDTH (reusing the P1 chunk store)
   and JUDGMENT; broker accountability + federation last. Crypto-generation
-  ships behind the crypto-disclosure gate (docs/WEB-VALUE.md §13.4). *Demo: a news bundle unlocked three
+  ships behind the crypto-disclosure gate (docs/08-WEB-VALUE.md §13.4). *Demo: a news bundle unlocked three
   ways — pay $0.10, watch a tracked-free sponsor frame, or run 90s of
   gentle CPU compute — each producing a verifiable receipt; the ledger shows
   the real per-unlock cost; a battery laptop is offered pay/attention, not
@@ -1744,7 +1744,7 @@ to "someone else's app." The bet is that packaging them into one coherent
 runtime with *excellent ergonomics* is the thing none of them shipped, and
 the thing that decides adoption.
 
-## 13. WVEP — value exchange (summary; full spec in docs/WEB-VALUE.md)  *(Tier 0 security + Tier 1/2 rails)*
+## 13. WVEP — value exchange (summary; full spec in docs/08-WEB-VALUE.md)  *(Tier 0 security + Tier 1/2 rails)*
 
 Monetization was the plan's most-cited hole (scorecard 3→6). WVEP closes it by
 generalizing "payment" into **browser-mediated value exchange** — an app may
@@ -1770,7 +1770,7 @@ sites. WVEP's safety invariants *extend* §10.
 
 **The full protocol — value classes, offer/receipt schemas, worker sandbox,
 crypto profile, broker/settlement model, the greed ledger, privacy modes, the
-safety invariants, and WVEP's own threat model — is `docs/WEB-VALUE.md`**
+safety invariants, and WVEP's own threat model — is `docs/08-WEB-VALUE.md`**
 (extracted because WVEP is both a protocol and an abuse magnet that deserves
 its own security document). It passed a 3-round adversarial review (2
 independent SHIP verdicts).
@@ -1791,8 +1791,8 @@ independent SHIP verdicts).
 | manifest | a small signed record: `{seq, bundle:b3:, prev, title, publisher, lifecycle, sig}` (§1, §2b) |
 | gateway | an *untrusted* HTTP byte-cache the client verifies; disposable by design (§3) |
 | swarm | LAN/DHT/QUIC peer distribution + Wirehair fountain symbols (§3) |
-| ValueOffer / ValueReceipt | WVEP's signed request-for-value / signed proof-of-contribution (WEB-VALUE.md) |
-| worker bundle | a `b3:` compute unit run in the strictest sandbox for a value session (WEB-VALUE.md) |
+| ValueOffer / ValueReceipt | WVEP's signed request-for-value / signed proof-of-contribution (08-WEB-VALUE.md) |
+| worker bundle | a `b3:` compute unit run in the strictest sandbox for a value session (08-WEB-VALUE.md) |
 | `host.trust_tier` | mandatory host signal: `native` (full) vs `extension` (full verification, capability-capped: public/read-mostly, no payments/private) (§0c) |
 | certainty ladder (C0–C5) | how much chrome trusts an authority: C0 hash → C4 bare name → C5 `dns:` legacy surface (§10.3, §18) |
 | maturity tiers (Tier 0–3) | invariant / accelerator / social / civilizational — distinct from C0–C4 (§0b) |
@@ -1813,7 +1813,7 @@ ServiceManifest     WEB-RPC      ed: identity, endpoints, iface:b3:, succession
 CapabilityManifest  WEB-PERMS    granted permissions incl. value_exchange +
                                  per-class caps, service_grants, resource_limits,
                                  permissions_may_expand
-ValueOffer/Receipt  WEB-VALUE    (defined in docs/WEB-VALUE.md)
+ValueOffer/Receipt  08-WEB-VALUE    (defined in docs/08-WEB-VALUE.md)
 DefaultsManifest    WEB-NAMING   refs to 4 signed sub-objects (rank/commons/
                                  R7/legacy-TLD), each independently forkable
 NameClaim           WEB-NAMING   { name, owner:ed:, expiry, sig } — free, non-excl.
@@ -1953,7 +1953,7 @@ D3 manual export
 > `gwb.data_snapshot() -> signed checkpoint`. `D2` is legal but *loud*
 > ("if the operator vanishes, your data may be lost"); the good tiers compete.
 
-**Value risk (V) — WVEP class → default policy (WEB-VALUE.md):**
+**Value risk (V) — WVEP class → default policy (08-WEB-VALUE.md):**
 ```
 V0 payment/entitlement          V4 bandwidth, public chunks
 V1 sponsor, no tracking         V5 human judgment, low-sensitivity
@@ -2192,7 +2192,7 @@ P2.5 I18N-A11Y     locale keytags + accessible identity chrome (merges §21.6)
 
 Already core, not re-authored: **data durability** (§2b/§18, `12-WEB-DATA.md`)
 and **supply chain** (§17.2, `11-WEB-PACKAGES.md`). **Market/energy** partly live
-in WVEP (`docs/WEB-VALUE.md`) already.
+in WVEP (`docs/08-WEB-VALUE.md`) already.
 
 **Reality-anchor:** listing these does not mean they are solved — the opposite.
 This section is the *map of what is not yet handled*, kept in the open so the

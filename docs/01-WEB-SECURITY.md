@@ -1,12 +1,12 @@
 # 01-WEB-SECURITY.md — hostile network, hostile names, hostile apps
 
-### Status: STUB. The design is complete in plan-webnext.md §10 (8-round
+### Status: STUB. The design is complete in 00-WEBNEXT-OVERVIEW.md §10 (8-round
 ### adversarial review, SHIP). This file is the P0 extraction target; the
 ### normative adversary matrix + test vectors are P0 work. Enforces
 ### Constitution rules 1, 3, 4, 7, 8.
 
 ## The rule everything rests on
-> Discovery can be messy. Execution cannot. (plan-webnext.md §10)
+> Discovery can be messy. Execution cannot. (00-WEBNEXT-OVERVIEW.md §10)
 
 ## Adversary matrix (the auditable core — expand to full test vectors in P0)
 
@@ -34,10 +34,10 @@ allow silent permission expansion   · auto-accept key rotation
 expose a global user identity       · treat broker/site/search/log as trusted
 ```
 
-## Certainty ladder (C0–C5) — see plan-webnext.md §10.3 / §18
+## Certainty ladder (C0–C5) — see 00-WEBNEXT-OVERVIEW.md §10.3 / §18
 Dangerous capabilities (payments, identity-sharing, private profiles, WVEP V3+)
 require **C1/C2 or better**, never C4/C5.
 
 *(Full seven-rule model, C0–C5 chrome treatment, the 12-adversary sweep with
 verdicts, trusted-chrome §10.6, key recovery §10.5, and normative test vectors:
-extract from plan-webnext.md §10 in P0.)*
+extract from 00-WEBNEXT-OVERVIEW.md §10 in P0.)*

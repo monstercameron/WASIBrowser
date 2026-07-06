@@ -1,6 +1,6 @@
 # Web scorecard — Web 2.0 and next.0 against an ideal
 
-Companion analysis to `plan-webnext.md`. **Part I** scores the current
+Companion analysis to `00-WEBNEXT-OVERVIEW.md`. **Part I** scores the current
 mainstream web across every dimension that makes up a web platform, against an
 ideal (10/10) spec — with full credit where it genuinely excels. **Part II**
 scores next.0 against the *same* rubric, honestly (design-ceiling scores,
@@ -14,7 +14,7 @@ any single verdict.
 **Scope.** "Web 2.0" here = the current web-app era: JS/SPA frameworks,
 REST/GraphQL over cloud origins, DNS + TLS + CDNs, cookies/OAuth, platforms
 and app stores. (Web 1.0 = static hypertext; "web3" = the crypto-token
-detour; next.0 = `plan-webnext.md`.)
+detour; next.0 = `00-WEBNEXT-OVERVIEW.md`.)
 
 **Scale.** `0–2` broken or actively harmful · `3–4` works but structurally
 deficient · `5–6` adequate with real limits · `7–8` strong, minor gaps ·
@@ -144,7 +144,7 @@ target.
 The lowest-scoring dimensions are the plan's explicit targets:
 
 - **Privacy 2.3 / sovereignty 2 / unlinkability 2** → app-scoped derived
-  identities, no cookies, no global id, oblivious fetch (`plan-webnext` §1,
+  identities, no cookies, no global id, oblivious fetch (`00-WEBNEXT-OVERVIEW` §1,
   §5).
 - **Permanence 2 / bus-proofing 3 / operator independence 3** → content
   addressing, swarm + gateway-agnostic fetch, offline-first (§2, §3).
@@ -310,7 +310,7 @@ discovery needs a crawl base that doesn't exist.
 
 Two honest holes the plan should own louder:
 - **Monetization** *(was the least-examined risk; draft-9 update: now 6, not
-  3 — WVEP, §13/WEB-VALUE.md, is a full browser-mediated value-exchange
+  3 — WVEP, §13/08-WEB-VALUE.md, is a full browser-mediated value-exchange
   protocol, adversarially reviewed to SHIP. Still rails/broker-bootstrap
   gated, so not closed — but no longer a void.)*
 - **Trust legibility (7)** is a *conditional* score — it collapses to ~3 if
@@ -356,7 +356,7 @@ bet is worth making; it does not say it is won.
 
 ## Postscript — the spec's design maturity (2026-07-06)
 
-`plan-webnext.md` was hardened through **six rounds of adversarial review**
+`00-WEBNEXT-OVERVIEW.md` was hardened through **six rounds of adversarial review**
 (hostile senior-engineer critics, findings 8 blockers → 3+9 → 3+6 → 1+1 →
 SHIP → SHIP-confirmed). Two independent final reviewers returned **SHIP**:
 easy dev sell, URL/name ergonomics judged **≥ HTTPS in steady state**, and no
@@ -400,7 +400,7 @@ contracts, prior-art sharpening, spec-family scaffold):
 | Naming UX | 6.5 | **7** | ladders + first-contact ceremony designed; the number is *gated on the P0 usability study* — unproven, honestly not 10 |
 | Monetization / WVEP | 8 | **9** | threat model + V-tiers + broker reputation + truth-in-pricing + failure receipts + no-moral-laundering added; real settlement rails are P3 build |
 | Implementation path | 7.5 | **9** | phases are now acceptance-tested release contracts; the tests must actually be *run* (build) |
-| Document structure | 5.5 | **8** | split scaffolded (index + WEB-VALUE.md written + WEB-SECURITY stub) + glossary + schema index + diagrams; the remaining ~10 specs are P0 extraction |
+| Document structure | 5.5 | **8** | split scaffolded (index + 08-WEB-VALUE.md written + WEB-SECURITY stub) + glossary + schema index + diagrams; the remaining ~10 specs are P0 extraction |
 
 **The honest last mile.** These refinements took the design-maturity axes from
 a ~7.5 mean to a **~8.6 mean** — and the gap from there to a clean 10 on each
