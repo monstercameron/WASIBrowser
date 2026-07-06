@@ -89,7 +89,7 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
 <body>
   <header id="toolbar">
     <div>
-      <span id="toolbar-title">GoWebBrowser</span>
+      <span id="toolbar-title">WASIBrowser</span>
       <span id="toolbar-guest">{{GUEST}}</span>
     </div>
     <div id="toolbar-actions">

@@ -1,7 +1,7 @@
 # GWB ABI v1 — wasm-first DOM interface (DRAFT 2, 2026-07-05)
 
 The contract between a guest app (any language, compiled to wasm/wasip1) and the
-GoWebBrowser renderer. Design goals, in priority order:
+WASIBrowser renderer. Design goals, in priority order:
 
 1. **Beat the JS DOM decisively on DOM-heavy workloads.** No per-call boundary tax,
    no string-heavy calls, no wrapper-object GC pressure, no accidental sync layout.

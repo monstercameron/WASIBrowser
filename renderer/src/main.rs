@@ -1,4 +1,4 @@
-//! GoWebBrowser renderer — Rust host process.
+//! WASIBrowser renderer — Rust host process.
 //!
 //! Blitz window (Stylo/Taffy/Vello) + wasmtime guest. The window carries a
 //! host-owned devtools-style console; guest stdout/stderr stream into it.
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
     }
 
     let attrs = WindowAttributes::default()
-        .with_title("GoWebBrowser")
+        .with_title("WASIBrowser")
         .with_surface_size(LogicalSize::new(1100.0, 800.0));
     let window = WindowConfig::with_attributes(Box::new(doc) as _, VelloWindowRenderer::new(), attrs);
 

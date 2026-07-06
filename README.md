@@ -1,6 +1,8 @@
-# GoWebBrowser
+# WASIBrowser
 
-**A wasm-first browser platform — research repo.**
+**A wasm-first browser platform — research repo.** (Formerly GoWebBrowser —
+renamed because the point is *every* language, not one. The `gwb`/`GWB1`
+prefixes live on as the ABI's wire names.)
 
 Any language compiles to WebAssembly and drives the page through a fast binary
 DOM ABI. **Zero JavaScript anywhere** — no script engine, no JS DOM bindings,
