@@ -77,8 +77,27 @@ pub enum Op {
 
 // ---------------------------------------------------------------- shared state
 
+/// An interned name: the raw string plus a lazily-built QualName (QualName
+/// clones are cheap Arc-ish atom copies; building one hashes — do it once).
+pub struct AtomEntry {
+    pub name: String,
+    qual: Option<QualName>,
+}
+
+impl AtomEntry {
+    fn new(name: String) -> Self {
+        Self { name, qual: None }
+    }
+    fn qual(&mut self) -> QualName {
+        if self.qual.is_none() {
+            self.qual = Some(QualName::new(None, ns!(html), LocalName::from(&*self.name)));
+        }
+        self.qual.clone().unwrap()
+    }
+}
+
 pub struct Shared {
-    pub atoms: Vec<Option<String>>,
+    pub atoms: Vec<Option<AtomEntry>>,
     pub batches: Vec<Vec<Op>>,
     pub event_region: (u32, u32),
     /// Guest called request_frame; cleared when gwb_frame is delivered.
@@ -88,8 +107,9 @@ pub struct Shared {
 }
 
 /// Well-known atoms 0..1024 (spec appendix; mirrored in sdk/gwb).
-fn well_known_atoms() -> Vec<Option<String>> {
-    let mut v: Vec<Option<String>> = vec![None; 1024];
+fn well_known_atoms() -> Vec<Option<AtomEntry>> {
+    let mut v: Vec<Option<AtomEntry>> = Vec::new();
+    v.resize_with(1024, || None);
     let entries: &[(usize, &str)] = &[
         // elements: 1..
         (1, "div"), (2, "span"), (3, "p"), (4, "h1"), (5, "h2"), (6, "h3"),
@@ -112,7 +132,7 @@ fn well_known_atoms() -> Vec<Option<String>> {
         (214, "border-radius"), (215, "cursor"), (216, "text-align"),
     ];
     for &(i, s) in entries {
-        v[i] = Some(s.to_string());
+        v[i] = Some(AtomEntry::new(s.to_string()));
     }
     v
 }
@@ -204,10 +224,6 @@ pub struct NodeMaps {
     pub last_rects: HashMap<u32, [f32; 4]>,
 }
 
-fn html_name(name: &str) -> QualName {
-    QualName::new(None, ns!(html), LocalName::from(name))
-}
-
 /// Drain all pending batches into the document. Returns (ops applied,
 /// blitz node focused by a Focus op — the caller should fix the caret).
 pub fn apply_batches(
@@ -221,6 +237,13 @@ pub fn apply_batches(
     }
     let batches = std::mem::take(&mut guard.batches);
 
+    // NOTE: an "auto-fragment" optimization (detach hot parents, mutate on
+    // the cheap path, reattach once) was tried here and MEASURED SLOWER
+    // (create5k apply 14ms -> 18.7ms): Blitz's per-op invalidation walks
+    // short-circuit on already-dirty ancestors, so the per-op path is cheap
+    // after the first op, while reattach re-traverses the whole subtree.
+    // Bulk-create cost is intrinsic per-node creation (stylo data init,
+    // slab insert) — an engine-side optimization target, not a batching one.
     let apply_start = Instant::now();
     let mut applied = 0;
     let mut focus_target: Option<usize> = None;
@@ -228,23 +251,21 @@ pub fn apply_batches(
     for ops in &batches {
         for op in ops {
             applied += 1;
-            // Cloned atom lookups keep borrows of `guard` short (DefineAtom
-            // mutates the same table mid-loop). v0 simplicity over zero-copy.
-            let atom = |g: &std::sync::MutexGuard<'_, Shared>, a: u32| -> Option<String> {
-                g.atoms.get(a as usize).and_then(|s| s.clone())
-            };
             let node = |maps: &NodeMaps, g: u32| maps.fwd.get(&g).copied();
             match op {
                 Op::DefineAtom { atom, name } => {
                     let idx = *atom as usize;
                     if guard.atoms.len() <= idx {
-                        guard.atoms.resize(idx + 1, None);
+                        guard.atoms.resize_with(idx + 1, || None);
                     }
-                    guard.atoms[idx] = Some(name.clone());
+                    guard.atoms[idx] = Some(AtomEntry::new(name.clone()));
                 }
                 Op::CreateElement { id, tag } => {
-                    let Some(tag) = atom(&guard, *tag) else { continue };
-                    let nid = m.create_element(html_name(&tag), Vec::new());
+                    let Some(entry) = guard.atoms.get_mut(*tag as usize).and_then(|e| e.as_mut())
+                    else {
+                        continue;
+                    };
+                    let nid = m.create_element(entry.qual(), Vec::new());
                     maps.fwd.insert(*id, nid);
                     maps.rev.insert(nid, *id);
                 }
@@ -254,13 +275,19 @@ pub fn apply_batches(
                     maps.rev.insert(nid, *id);
                 }
                 Op::SetAttr { id, name, value } => {
-                    if let (Some(n), Some(name)) = (node(maps, *id), atom(&guard, *name)) {
-                        m.set_attribute(n, html_name(&name), value);
+                    if let (Some(n), Some(entry)) = (
+                        node(maps, *id),
+                        guard.atoms.get_mut(*name as usize).and_then(|e| e.as_mut()),
+                    ) {
+                        m.set_attribute(n, entry.qual(), value);
                     }
                 }
                 Op::RemoveAttr { id, name } => {
-                    if let (Some(n), Some(name)) = (node(maps, *id), atom(&guard, *name)) {
-                        m.clear_attribute(n, html_name(&name));
+                    if let (Some(n), Some(entry)) = (
+                        node(maps, *id),
+                        guard.atoms.get_mut(*name as usize).and_then(|e| e.as_mut()),
+                    ) {
+                        m.clear_attribute(n, entry.qual());
                     }
                 }
                 Op::SetText { id, text } => {
@@ -269,13 +296,19 @@ pub fn apply_batches(
                     }
                 }
                 Op::SetStyle { id, prop, value } => {
-                    if let (Some(n), Some(prop)) = (node(maps, *id), atom(&guard, *prop)) {
-                        m.set_style_property(n, &prop, value);
+                    if let (Some(n), Some(entry)) = (
+                        node(maps, *id),
+                        guard.atoms.get(*prop as usize).and_then(|e| e.as_ref()),
+                    ) {
+                        m.set_style_property(n, &entry.name, value);
                     }
                 }
                 Op::RemoveStyle { id, prop } => {
-                    if let (Some(n), Some(prop)) = (node(maps, *id), atom(&guard, *prop)) {
-                        m.remove_style_property(n, &prop);
+                    if let (Some(n), Some(entry)) = (
+                        node(maps, *id),
+                        guard.atoms.get(*prop as usize).and_then(|e| e.as_ref()),
+                    ) {
+                        m.remove_style_property(n, &entry.name);
                     }
                 }
                 Op::AppendChild { parent, child } => {

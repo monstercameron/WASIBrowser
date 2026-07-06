@@ -81,6 +81,38 @@ cd renderer; .\target\release\renderer.exe bench-c.wasm --script bench-test.txt
 cd bench\js; npm i playwright; node run.mjs
 ```
 
+## Optimization round 1 (same day)
+
+Tried two host-side optimizations against the `apply` deficit:
+
+1. **Atom/QualName caching** (resolve each name atom to an interned QualName
+   once, ever, instead of clone + re-intern per op): **kept.** classAll@1k
+   apply fell 1,084 → 756 µs (total 1,306 → 889, −32%); attr-heavy workloads
+   all improved; creates within run-to-run variance.
+2. **Auto-fragment** (detach hot parents, mutate on the cheap
+   not-in-document path, reattach once — automatic DocumentFragment):
+   **rejected by measurement.** create5k apply went 14 → 18.7 ms. The cost
+   model was wrong: Blitz's per-op invalidation walks short-circuit on
+   already-dirty ancestors, so the per-op path is cheap after the first op,
+   while reattaching re-traverses the entire subtree. Bulk-create cost is
+   intrinsic per-node creation (stylo element-data init, slab insert,
+   ElementData construction) — an engine-side target.
+
+Post-round medians (µs): create1k 3,762 · updateAll@1k 597 · updateOne 36 ·
+classAll@1k 889 · create5k 14,291 · updateAll@5k 2,555 · clear@5k 10,012.
+(Fanless X2: run-to-run thermal variance is a few hundred µs on the creates;
+compare trends, not single digits.)
+
+**Remaining gap analysis:** beating Blink on *mutation-only bulk create*
+requires engine work inside blitz-dom itself — `create_element` eagerly
+initializes stylo element data with ALL_DAMAGE and flushes style attributes
+per node, where Blink defers most of that into its batched style pass. The
+realistic path is a vendored Blitz patch (path-dependency on the local
+checkout) deferring per-node style init into the existing resolve pass —
+plausibly 2–3× on creates, and upstreamable. Everything outside bulk
+mutation-only is already won: the boundary (6×), interaction latency (25 µs),
+and every layout-inclusive workload (3–14×).
+
 ## Follow-ups, in value order
 
 1. Batch-coalesced damage marking in apply (host knows batch extent) — the
