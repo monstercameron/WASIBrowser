@@ -16,3 +16,5 @@ target/
 *.pdb
 *.obj
 *.lib
+*~
+*.exe~
