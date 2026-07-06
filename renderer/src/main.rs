@@ -13,6 +13,7 @@
 mod abi;
 mod guest;
 mod logger;
+mod manifest;
 mod script;
 mod ui;
 
@@ -36,15 +37,32 @@ fn main() -> Result<()> {
         .position(|a| a == "--script")
         .and_then(|i| args.get(i + 1))
         .cloned();
-    let wasm_path = args
+    let manifest_root = args
         .iter()
-        .find(|a| !a.starts_with("--") && Some(a.as_str()) != script_path.as_deref())
+        .position(|a| a == "--manifest-root")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "manifests".to_string());
+    // Navigation target: a `web://name` address or a `.wasm` path.
+    let target = args
+        .iter()
+        .find(|a| !a.starts_with("--") && Some(a.as_str()) != script_path.as_deref()
+            && Some(a.as_str()) != Some(manifest_root.as_str()))
         .cloned()
         .unwrap_or_else(|| "hello.wasm".to_string());
+
+    // Resolve the target into a bundle + service registry (docs/04-WEB-RPC.md §4).
+    let resolved = manifest::resolve(&target, &manifest_root)
+        .with_context(|| format!("resolving {target}"))?;
+    let wasm_path = resolved.bundle_path.clone();
+    if resolved.dev_unverified {
+        logger::log("rpc", &format!("dev: loading unverified bundle '{wasm_path}' (no b3: check)"));
+    }
     logger::log(
         "sys",
         &format!(
-            "starting; guest={wasm_path} crash_test={crash_test} cwd={}",
+            "navigating to '{target}' -> bundle={wasm_path} title=\"{}\" crash_test={crash_test} cwd={}",
+            resolved.title,
             std::env::current_dir()?.display()
         ),
     );
@@ -57,7 +75,7 @@ fn main() -> Result<()> {
     // GWB guests (export gwb_abi_version) run in-process on the UI thread;
     // anything else falls back to legacy console mode (_start on a thread).
     let mut legacy = false;
-    match abi::try_load(&wasm_path, proxy.clone()) {
+    match abi::try_load(&wasm_path, proxy.clone(), resolved.services) {
         Ok(Some(mut rt)) => {
             rt.start(1100.0, 800.0, 1.0, 1)
                 .context("gwb_start failed")?;
@@ -70,8 +88,9 @@ fn main() -> Result<()> {
         }
     }
 
+    let win_title = format!("{} — WASIBrowser", resolved.title);
     let attrs = WindowAttributes::default()
-        .with_title("WASIBrowser")
+        .with_title(win_title)
         .with_surface_size(LogicalSize::new(1100.0, 800.0));
     let window = WindowConfig::with_attributes(Box::new(doc) as _, VelloWindowRenderer::new(), attrs);
 

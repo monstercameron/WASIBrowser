@@ -1,0 +1,13 @@
+{
+  "name": "shop.local",
+  "title": "Aurelia — Clothing & Accessories",
+  "publisher": "ed:dev-local",
+  "bundle": "shop.wasm",
+  "services": {
+    "auth":    { "iface": "shop.auth.v1",    "endpoint": "http://127.0.0.1:8787", "key": "ed:dev-server" },
+    "catalog": { "iface": "shop.catalog.v1", "endpoint": "http://127.0.0.1:8787", "key": "ed:dev-server" },
+    "cart":    { "iface": "shop.cart.v1",    "endpoint": "http://127.0.0.1:8787", "key": "ed:dev-server" },
+    "orders":  { "iface": "shop.orders.v1",  "endpoint": "http://127.0.0.1:8787", "key": "ed:dev-server" },
+    "admin":   { "iface": "shop.admin.v1",   "endpoint": "http://127.0.0.1:8787", "key": "ed:dev-server" }
+  }
+}

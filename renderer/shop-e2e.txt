@@ -1,0 +1,38 @@
+# Aurelia storefront end-to-end: browse -> sign in -> add to cart -> checkout -> confirm
+# Drives the real UI; every step round-trips authenticated RPC to the Go server.
+wait 1500
+dump logs/e2e-1-catalog.txt
+# sign in
+click #nav-login
+wait 400
+click #email
+type "shopper@aurelia.dev"
+click #password
+type "shop1234"
+click #login-submit
+wait 900
+dump logs/e2e-2-loggedin.txt
+# add two items to the cart (requires the session)
+click #add-linen-shirt
+wait 500
+click #add-leather-belt
+wait 500
+# open the cart
+click #nav-cart
+wait 600
+dump logs/e2e-3-cart.txt
+# checkout
+click #go-checkout
+wait 400
+click #ship-name
+type "Ada Lovelace"
+click #ship-addr
+type "1 Analytical Way"
+click #ship-city
+type "Miami"
+click #ship-zip
+type "33101"
+click #place-order
+wait 800
+dump logs/e2e-4-confirm.txt
+quit

@@ -711,6 +711,133 @@ static void gc_query_complete(const gwb_event *e) {
     }
 }
 
+/* ------------------------------------------------------------ RPC (docs/04-WEB-RPC.md)
+ * Host-mediated RPC, two shapes on one completion path (RPC_RESULT, kind 41):
+ *   useRpc(key, service, iface, method, payload, flags)  — declarative READ,
+ *     cached + auto-issued when idle/stale, re-renders on completion (like
+ *     useQuery). Key by content (e.g. "catalog:tops") so a changed arg refetches.
+ *   gwbc_rpc(service, iface, method, payload, flags, cb, ud) — imperative
+ *     MUTATION fired from an event; cb(ok,errClass,status,body,ud) runs on
+ *     completion (before re-render) so it can set a session, invalidate reads, etc.
+ * invalidate(key) marks a read stale; the next render refetches.
+ */
+enum { RPC_IDLE, RPC_LOADING, RPC_OK, RPC_ERR };
+
+typedef struct {
+    i32 loading;    /* in flight, nothing to show yet */
+    i32 fetching;   /* in flight (first or refetch) */
+    i32 ok;         /* last completion succeeded */
+    i32 err;        /* last completion failed */
+    u8 errClass;    /* GWB_RPC_ERR_* when err */
+    u16 status;     /* HTTP status */
+    const char *data; /* response body ("" until first success) */
+} RpcResult;
+
+#ifndef GWBC_MAX_RPCS
+#define GWBC_MAX_RPCS 24
+#endif
+#ifndef GWBC_RPC_POOL_SIZE
+#define GWBC_RPC_POOL_SIZE (128 * 1024)
+#endif
+
+typedef struct {
+    const char *key;
+    u8 status, inFlight, stale, errClass;
+    u32 reqId;
+    u16 httpStatus;
+    u32 dataOff; /* into gc_rpcpool; 0xFFFFFFFF = none */
+} GcRpc;
+static GcRpc gc_rpcs[GWBC_MAX_RPCS];
+static u32 gc_rpc_count;
+static char gc_rpcpool[GWBC_RPC_POOL_SIZE];
+static u32 gc_rpcpool_len;
+
+static GcRpc *gc_rpc_slot(const char *key) {
+    for (u32 i = 0; i < gc_rpc_count; i++)
+        if (gc_streq(gc_rpcs[i].key, key)) return &gc_rpcs[i];
+    if (gc_rpc_count >= GWBC_MAX_RPCS) gwbc_panic("gwbc: rpc cache full (GWBC_MAX_RPCS)");
+    GcRpc *r = &gc_rpcs[gc_rpc_count++];
+    r->key = key; r->status = RPC_IDLE; r->inFlight = 0; r->stale = 0;
+    r->errClass = 0; r->reqId = 0; r->httpStatus = 0; r->dataOff = 0xFFFFFFFFu;
+    return r;
+}
+
+static RpcResult useRpc(const char *key, const char *service, const char *iface,
+                        const char *method, const char *payload, u16 flags) {
+    GcRpc *q = gc_rpc_slot(key);
+    if (!q->inFlight && (q->status == RPC_IDLE || q->stale)) {
+        q->reqId = gwb_rpc_call(service, iface, method, payload, flags);
+        q->inFlight = 1; q->stale = 0;
+        if (q->status == RPC_IDLE) q->status = RPC_LOADING;
+    }
+    RpcResult r = {0};
+    r.loading = q->status == RPC_LOADING;
+    r.fetching = q->inFlight;
+    r.ok = q->status == RPC_OK;
+    r.err = q->status == RPC_ERR;
+    r.errClass = q->errClass;
+    r.status = q->httpStatus;
+    r.data = q->dataOff == 0xFFFFFFFFu ? "" : gc_rpcpool + q->dataOff;
+    return r;
+}
+
+static RpcResult rpcResult(const char *key) {
+    return useRpc(key, "", "", "", 0, 0); /* read-only view; empty svc never issues */
+}
+
+static void invalidate(const char *key) { gc_rpc_slot(key)->stale = 1; }
+
+static void gc_rpc_store(GcRpc *q, const gwb_event *e) {
+    q->inFlight = 0;
+    if (gc_rpcpool_len + e->str_len + 1 > GWBC_RPC_POOL_SIZE)
+        gwbc_panic("gwbc: rpc pool full (GWBC_RPC_POOL_SIZE)");
+    q->dataOff = gc_rpcpool_len;
+    for (u32 j = 0; j < e->str_len; j++) gc_rpcpool[gc_rpcpool_len++] = e->str[j];
+    gc_rpcpool[gc_rpcpool_len++] = 0;
+    q->httpStatus = e->rpcStatus;
+    q->errClass = e->rpcErrClass;
+    q->status = e->rpcOk ? RPC_OK : RPC_ERR;
+}
+
+/* imperative mutation with completion callback */
+typedef void (*RpcCb)(i32 ok, i32 errClass, i32 status, const char *body, void *ud);
+#ifndef GWBC_MAX_RPC_PENDING
+#define GWBC_MAX_RPC_PENDING 16
+#endif
+typedef struct { u32 reqId; RpcCb cb; void *ud; } GcRpcPending;
+static GcRpcPending gc_rpc_pending[GWBC_MAX_RPC_PENDING];
+static u32 gc_rpc_pending_count;
+
+static u32 gwbc_rpc(const char *service, const char *iface, const char *method,
+                    const char *payload, u16 flags, RpcCb cb, void *ud) {
+    u32 id = gwb_rpc_call(service, iface, method, payload, flags);
+    if (id && cb) {
+        if (gc_rpc_pending_count >= GWBC_MAX_RPC_PENDING)
+            gwbc_panic("gwbc: too many pending rpc mutations");
+        GcRpcPending *p = &gc_rpc_pending[gc_rpc_pending_count++];
+        p->reqId = id; p->cb = cb; p->ud = ud;
+    }
+    return id;
+}
+
+/* Route an RPC_RESULT: a pending mutation callback wins, else a keyed read. */
+static void gc_rpc_complete(const gwb_event *e) {
+    for (u32 i = 0; i < gc_rpc_pending_count; i++) {
+        if (gc_rpc_pending[i].reqId == e->rpcReqId) {
+            GcRpcPending p = gc_rpc_pending[i];
+            gc_rpc_pending[i] = gc_rpc_pending[--gc_rpc_pending_count];
+            if (p.cb) p.cb(e->rpcOk, e->rpcErrClass, e->rpcStatus, e->str, p.ud);
+            return;
+        }
+    }
+    for (u32 i = 0; i < gc_rpc_count; i++) {
+        if (gc_rpcs[i].reqId == e->rpcReqId && gc_rpcs[i].inFlight) {
+            gc_rpc_store(&gc_rpcs[i], e);
+            return;
+        }
+    }
+}
+
 /* node-id -> handler map, rebuilt each render */
 static u32 gc_hn_node[256]; static u32 gc_hn_handler[256]; static u16 gc_hn_kind[256];
 static u32 gc_hn_count;
@@ -1040,6 +1167,11 @@ static u32 gc_on_event(const gwb_event *e) {
     if (e->kind == GWB_EV_NET_RESULT) {
         gc_query_complete(e);
         gwbc_render(); /* plain re-render: all useQuery readers see new state */
+        return 0;
+    }
+    if (e->kind == GWB_EV_RPC_RESULT) {
+        gc_rpc_complete(e); /* runs mutation callback or stores a keyed read */
+        gwbc_render();      /* all useRpc readers see new state */
         return 0;
     }
     for (u32 i = 0; i < gc_hn_count; i++) {
