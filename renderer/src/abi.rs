@@ -221,6 +221,7 @@ pub fn apply_batches(
     }
     let batches = std::mem::take(&mut guard.batches);
 
+    let apply_start = Instant::now();
     let mut applied = 0;
     let mut focus_target: Option<usize> = None;
     let mut m = doc.mutate();
@@ -341,7 +342,14 @@ pub fn apply_batches(
     if let Some(n) = focus_target {
         doc.set_focus_to(n);
     }
-    crate::logger::log("abi", &format!("applied {applied} ops from {} batch(es)", batches.len()));
+    crate::logger::log(
+        "abi",
+        &format!(
+            "applied {applied} ops from {} batch(es), apply_us={}",
+            batches.len(),
+            apply_start.elapsed().as_micros()
+        ),
+    );
     (applied, focus_target)
 }
 
@@ -406,9 +414,18 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
             if ptr + len > data.len() {
                 return u32::MAX;
             }
+            let t0 = std::time::Instant::now();
             match decode_batch(&data[ptr..ptr + len]) {
                 Ok(ops) => {
-                    crate::logger::log("abi", &format!("submit: {} ops, {} bytes", ops.len(), len));
+                    crate::logger::log(
+                        "abi",
+                        &format!(
+                            "submit: {} ops, {} bytes, decode_us={}",
+                            ops.len(),
+                            len,
+                            t0.elapsed().as_micros()
+                        ),
+                    );
                     shared.lock().unwrap().batches.push(ops);
                     0
                 }

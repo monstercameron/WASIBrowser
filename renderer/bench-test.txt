@@ -1,0 +1,37 @@
+# bench-c driver: 5 reps of the workload cycle; timings land in system.log
+wait 600
+click #b-create1k
+click #b-update-all
+click #b-update-one
+click #b-class-all
+click #b-clear
+click #b-create1k
+click #b-update-all
+click #b-update-one
+click #b-class-all
+click #b-clear
+click #b-create1k
+click #b-update-all
+click #b-update-one
+click #b-class-all
+click #b-clear
+click #b-create1k
+click #b-update-all
+click #b-update-one
+click #b-class-all
+click #b-clear
+click #b-create1k
+click #b-update-all
+click #b-update-one
+click #b-class-all
+click #b-clear
+click #b-create5k
+click #b-update-all
+click #b-clear
+click #b-create5k
+click #b-update-all
+click #b-clear
+click #b-create5k
+click #b-update-all
+click #b-clear
+quit

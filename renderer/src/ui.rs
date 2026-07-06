@@ -509,12 +509,7 @@ impl EventHandler for GwbEventHandler<'_> {
 
         let preventable = event.cancelable;
         let record_flags = if preventable { 1u16 } else { 0 };
-        if eo.kind != crate::abi::ev::POINTER_MOVE {
-            crate::logger::log(
-                "event",
-                &format!("{} -> guest (target={target} listener={listener})", event.name()),
-            );
-        }
+        let call_start = std::time::Instant::now();
         // ABI law: batches submitted during dispatch are applied AFTER the
         // event driver finishes (see handle_ui_event) — mutating the tree
         // mid-dispatch invalidates the driver's node chain (learned the hard
@@ -522,6 +517,16 @@ impl EventHandler for GwbEventHandler<'_> {
         let _ = doc;
         match self.rt.deliver_event(&eo, record_flags, target, listener) {
             Ok(flags) => {
+                if eo.kind != crate::abi::ev::POINTER_MOVE {
+                    crate::logger::log(
+                        "event",
+                        &format!(
+                            "{} -> guest (target={target} listener={listener}) guest_call_us={}",
+                            event.name(),
+                            call_start.elapsed().as_micros()
+                        ),
+                    );
+                }
                 if preventable && flags & 1 != 0 {
                     event_state.prevent_default();
                 }

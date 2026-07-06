@@ -83,9 +83,14 @@ static void gwb_register_event_region(void) {
 static u32 gwb_next_id = 1; /* 1 is ROOT */
 static u32 gwb_new_id(void) { return ++gwb_next_id; }
 
-/* ---- batch builder (static buffers) ---- */
+/* ---- batch builder (static buffers) ----
+ * Overridable: #define before including gwb.h for op-heavy guests. */
+#ifndef GWB_OPS_CAP
 #define GWB_OPS_CAP (64 * 1024)
+#endif
+#ifndef GWB_HEAP_CAP
 #define GWB_HEAP_CAP (64 * 1024)
+#endif
 static u8 gwb_batch_buf[16 + GWB_OPS_CAP + GWB_HEAP_CAP];
 static u8 gwb_heap_buf[GWB_HEAP_CAP];
 static u32 gwb_ops_len, gwb_heap_len, gwb_op_count;

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>JS DOM bench</title>
+<style>.row{display:flex;gap:8px}</style>
+</head>
+<body>
+<p id="status">ready</p>
+<div id="list"></div>
+<script>
+/* Mirrors examples/bench-c/bench.c exactly:
+ * rows: div.row > (span "Item N") + (button "x")
+ * Workloads time the synchronous DOM mutation loop with performance.now().
+ * Two flavors per workload:
+ *   mutOnly  - pure DOM calls (fair vs guest_call+decode+apply)
+ *   +layout  - same, then a forced synchronous layout (offsetHeight)
+ */
+const list = document.getElementById('list');
+const statusEl = document.getElementById('status').firstChild;
+let spans = [];
+let rows = [];
+
+function clearRows() {
+  list.textContent = '';
+  spans = []; rows = [];
+}
+
+function createRows(n) {
+  clearRows();
+  for (let i = 0; i < n; i++) {
+    const row = document.createElement('div');
+    row.setAttribute('class', 'row');
+    const span = document.createElement('span');
+    const txt = document.createTextNode('Item ' + (i + 1));
+    span.appendChild(txt);
+    row.appendChild(span);
+    const btn = document.createElement('button');
+    btn.appendChild(document.createTextNode('x'));
+    row.appendChild(btn);
+    list.appendChild(row);
+    rows.push(row);
+    spans.push(txt);
+  }
+  statusEl.data = 'created ' + n + ' rows';
+}
+
+function updateAll() {
+  for (let i = 0; i < spans.length; i++) {
+    spans[i].data = 'Item ' + (i + 1) + ' updated';
+  }
+  statusEl.data = 'updated all';
+}
+
+function updateOne() {
+  const mid = spans.length >> 1;
+  if (spans.length) spans[mid].data = 'Item ' + (mid + 1) + ' touched';
+  statusEl.data = 'updated one';
+}
+
+function classAll() {
+  for (let i = 0; i < rows.length; i++) {
+    rows[i].setAttribute('class', 'row toggled');
+  }
+  statusEl.data = 'classed all';
+}
+
+function timeIt(fn) {
+  const t0 = performance.now();
+  fn();
+  const mutOnly = (performance.now() - t0) * 1000; // us
+  const t1 = performance.now();
+  void list.offsetHeight; // force style+layout
+  const layout = (performance.now() - t1) * 1000;
+  return { mutOnlyUs: Math.round(mutOnly), layoutUs: Math.round(layout) };
+}
+
+/* Driven by run.mjs via page.evaluate. */
+window.bench = {
+  create: (n) => timeIt(() => createRows(n)),
+  updateAll: () => timeIt(updateAll),
+  updateOne: () => timeIt(updateOne),
+  classAll: () => timeIt(classAll),
+  clear: () => timeIt(clearRows),
+  rowCount: () => rows.length,
+};
+</script>
+</body>
+</html>
