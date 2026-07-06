@@ -1,10 +1,12 @@
-# Web 2.0 — a full-dimension scorecard against an ideal
+# Web scorecard — Web 2.0 and next.0 against an ideal
 
-Companion analysis to `plan-webnext.md`. The point of next.0 is only as good
-as the honest measure of what it's replacing. So this scores the **current
-mainstream web** across every dimension that makes up a web platform, against
-an ideal (10/10) spec on each — with full credit where the web genuinely
-excels. A rubric that lowballs the incumbent to flatter the challenger is
+Companion analysis to `plan-webnext.md`. **Part I** scores the current
+mainstream web across every dimension that makes up a web platform, against an
+ideal (10/10) spec — with full credit where it genuinely excels. **Part II**
+scores next.0 against the *same* rubric, honestly (design-ceiling scores,
+heavily discounted for being mostly unbuilt and unadopted). The point of
+next.0 is only as good as the honest measure of what it's replacing — and of
+itself. A rubric that lowballs the incumbent to flatter the challenger is
 useless; the web is the most successful software platform in history for real
 reasons, and the *pattern* of where it wins and loses is more persuasive than
 any single verdict.
@@ -162,3 +164,162 @@ one; accessibility compliance (6) and dark-pattern UX (4) are cultural; and
 its own hardest risk is regressing the incumbent's 10-and-9 (open, easy) while
 chasing the 2s and 3s. The scorecard motivates the plan; it doesn't absolve
 it — the plan has its own honest-risks section (§7) for a reason.
+
+---
+
+# Part II — next.0 against the same rubric
+
+Same 37 dimensions, same ideal. **The honesty problem, stated first:** Web 2.0
+was scored as a *shipped, planetary-scale, battle-tested* system. next.0 is a
+*design doc plus a partial runtime.* Scoring a plan against a deployed system
+is structurally generous, so every score below is a **design ceiling** — what
+the dimension becomes *if the plan is built as specified AND reaches
+meaningful adoption.* Neither "if" is given, and two discounts apply to every
+number below. They are the whole story:
+
+1. **Maturity discount.** Most of this is unbuilt. As it stands *today*, the
+   only dimensions with a real non-zero score are the runtime-layer ones that
+   actually exist and were measured (latency, language freedom, code
+   integrity in part). Everything else is ~0–2 today.
+2. **Adoption discount.** The biggest wins are network-effect-gated. A swarm
+   with no peers is a gateway; a non-exclusive name system with no log quorum
+   is a chooser dialog; censorship resistance with no mirrors is a single
+   point of failure. "Decentralization: 8" is a *ceiling* worth its realized
+   fraction — today, near zero.
+
+Tags: **[S]** structural (guaranteed by architecture if built) · **[P]** proven
+(built/measured) · **[A]** adoption-gated · **[X]** execution risk · **[O]**
+open/unsolved (plan flags it) · **[R]** regression vs web · **[—]** unaddressed.
+
+### 1. Access & reach — web 7.5 → next.0 **7.2** (−0.3: the crown-jewel dip)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Zero-install access | 10 | **8** | [R][A] runs like a link, offline relaunch — but needs *its own runtime* installed; the web needs none |
+| Cross-platform reach | 9 | **8** | [S][X] wasm is portable; the renderer must be ported per platform; mobile unproven |
+| Addressability | 6 | **9** | [S] content addresses never rot — a structural fix |
+| Discoverability | 7 | **6** | [A][O] no crawl base; indexing a content-addressed web is genuinely harder |
+| Accessibility | 6 | **6** | [X] AccessKit hooks exist, but decades behind ARIA maturity |
+| Internationalization | 7 | **6** | [O] ascii-only names v1; IDN explicitly deferred |
+
+### 2. Performance & efficiency — web 3.6 → next.0 **8.4** (+4.8)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Interaction latency | 5 | **9** | [P] measured 29 ns/op, 25 µs round-trip, no JS |
+| Payload / data efficiency | 3 | **9** | [S] chunk dedup + delta updates + binary wire |
+| Resource use | 3 | **7** | [S][X] no per-tab JS engine; GPU renderer isn't free |
+| Offline capability | 3 | **9** | [S] offline-first is a Tier-0 invariant |
+| Cold-start | 4 | **8** | [S] compile-cache + mmap relaunch; first-ever load still compiles wasm |
+
+### 3. Developer experience — web 6.2 → next.0 **6.3** (+0.1: a wash)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Authoring floor | 7 | **5** | [R] needs a toolchain; no view-source-and-edit-in-notepad |
+| Language freedom | 3 | **9** | [P] any-language wasm; Go/Rust/C proven byte-identical |
+| Backend / API model | 5 | **8** | [S] RPC-first, capability-scoped, no MVC |
+| Tooling & ecosystem | 8 | **3** | [R][A] ~nothing exists; years to approach npm's universe |
+| Debuggability | 6 | **5** | [X] golden driver + crash logs, but no mature devtools |
+| Deploy / distribute | 8 | **8** | [S] push bytes to any gateway, or seed |
+
+### 4. Security — web 4.3 → next.0 **8.5** (+4.2)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Transport security | 8 | **9** | [S] QUIC/Noise, key-verified endpoints, no CA tree |
+| Sandbox / isolation | 6 | **8** | [S] wasm + capability model, host is kernel |
+| Least privilege | 3 | **9** | [S] no ambient authority, manifest capabilities |
+| Supply-chain integrity | 2 | **7** | [S] signed bundle + cap-limited blast radius (not immune to abused grants) |
+| Content / code integrity | 3 | **10** | [S] mandatory, non-bypassable verification — the core thesis |
+| Authentication | 4 | **8** | [S][O] key-based, one-signature; key-loss recovery unsolved |
+
+### 5. Privacy — web 2.3 → next.0 **8.3** (+6.0: the largest win)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Surveillance resistance | 2 | **9** | [S] no cookies, no global id, encrypted wire |
+| Data minimization & control | 2 | **8** | [S] capability-gated, explicit grants |
+| Identity unlinkability | 2 | **9** | [S] HKDF per-app keys, unlinkable by construction |
+| Metadata protection | 3 | **7** | [S][A] herd effect + oblivious mode (opt-in; gateways still see hashes) |
+
+### 6. Decentralization & resilience — web 2.6 → next.0 **8.2** (+5.6, most adoption-gated)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Censorship resistance | 3 | **7** | [A][O] DNS-independent, but not censorship-*proof*; needs mirrors to exist |
+| Bus-proofing (SPOF) | 3 | **8** | [S][A] any cache serves verified bytes — *if* someone serves them |
+| Content permanence | 2 | **8** | [S][A] immortal bytes if seeded; §2b is honest that unpinned decays |
+| Operator independence | 3 | **9** | [S] apps aren't host-bound |
+| Data & identity sovereignty | 2 | **9** | [S] user owns the master key |
+
+### 7. Economics & governance — web 4.5 → next.0 **6.5** (+2.0)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| Cost to publish | 8 | **8** | [S] gateway or seed |
+| Cost to consume (equity) | 4 | **8** | [S] binary + dedup + delta + cache + LAN: cheap on bad/expensive links |
+| Monetization health | 2 | **3** | [R][—] kills surveillance ads with **no replacement** — a hole, maybe a regression for creators |
+| Naming economics | 4 | **7** | [S][A][O] no registrars/rent, but log quorum + keyed-name UX unproven |
+| Lock-in / monopoly | 3 | **7** | [S][A] portable; but discovery could re-centralize onto gateways/search |
+| Standards / governance | 6 | **6** | [O] specs-first, but currently one author's draft, no standards body |
+
+### 8. UX & trust — web 4.6 → next.0 **7.2** (+2.6)
+
+| Dimension | Web | next.0 | Note |
+|---|---|---|---|
+| UI capability / richness | 9 | **7** | [X][R] Blitz is capable but years behind Blink (forms/IME/CSS/media gaps) |
+| Consistency / predictability | 4 | **6** | [S][—] uniform trust chrome; app-level dark patterns remain |
+| Trust legibility | 3 | **7** | [S][O] identity chip + certainty ladder — gated on the unsolved "keys must become human" (§10.7) |
+| Cross-app interoperability | 3 | **7** | [S] capability RPC + shared identity substrate |
+| Durability of artifacts | 4 | **9** | [S] content-addressed immutable bundles + frozen ABI run unchanged for decades |
+
+## Verdict
+
+```
+                    web 2.0   next.0 ceiling   Δ
+1 Access & reach      7.5         7.2        −0.3   crown-jewel dip
+2 Performance         3.6         8.4        +4.8
+3 Developer exp.      6.2         6.3        +0.1   wash
+4 Security            4.3         8.5        +4.2
+5 Privacy             2.3         8.3        +6.0   largest gain
+6 Decentralization    2.6         8.2        +5.6   most adoption-gated
+7 Economics/gov       4.5         6.5        +2.0
+8 UX & trust          4.6         7.2        +2.6
+                    ─────       ─────
+overall (unweighted)  5.3         8.7 (ceiling)
+```
+
+**Do not trust the 8.7 either** — it is a ceiling, and it multiplies by two
+discounts that are, today, brutal (realized ≈ 2). The finding is again the
+*shape*, and it is a near-perfect mirror image of Web 2.0's:
+
+- **next.0's gains sit almost entirely in the web's latent-failure quadrants**
+  — privacy (+6.0), decentralization (+5.6), performance (+4.8), security
+  (+4.2): the things you feel in five *years*.
+- **Its non-gains and regressions sit almost entirely in the web's crown
+  jewels** — access (−0.3), developer experience (wash), UI richness (9→7),
+  tooling (8→3): the things you feel in five *seconds*.
+
+That is the exact fault line the Web 2.0 scorecard warned about, now
+quantified: challengers die by regressing the immediate virtues while chasing
+the latent ones. The path from next.0's realized ≈ 2 to its ceiling 8.7 runs
+*directly through* the dimensions where it currently loses — reach needs its
+runtime everywhere; UI needs Blink-class coverage; the ecosystem needs years;
+discovery needs a crawl base that doesn't exist.
+
+Two honest holes the plan should own louder:
+- **Monetization (3)** is the least-examined risk. Removing surveillance ads
+  without a replacement is not automatically a win — it can starve the
+  creators whose content made the web worth browsing. The plan has no answer;
+  it should say so plainly.
+- **Trust legibility (7)** is a *conditional* score — it collapses to ~3 if
+  the "keys must become human" UX problem (§10.7, the plan's own highest-risk
+  item) isn't solved.
+
+**Bottom line:** on this rubric next.0 is not "a better web." It is a
+*different bet* — trade the incumbent's latent failures for the challenger's
+adoption risk. If built and adopted, it dominates the dimensions that matter
+most under an adversary and over a decade. Neither "if" is close to settled,
+and an honest score is the ceiling times two discounts. The scorecard says the
+bet is worth making; it does not say it is won.
