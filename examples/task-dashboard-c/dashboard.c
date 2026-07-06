@@ -1,10 +1,10 @@
 /* dashboard.c — larger component-model demo for gwbc.h.
  *
  * Demonstrates: nested components, typed props, prop drilling, context,
- * struct/enum/str state, previous state, payload-bound handlers (withI32),
- * imported plain-C business logic, keyed+filtered lists, conditional
- * rendering, reusable layout components with children-as-props, disabled
- * buttons, and a debug panel.
+ * struct/enum/str state, previous state, payload-bound handlers (bindI32),
+ * imported plain-C business logic, keyed+filtered lists (mapKeyedIf),
+ * conditional rendering, reusable layout components with children-as-props,
+ * disabled buttons, event logging, and a debug panel.
  *
  * Build:
  *   clang --target=wasm32-unknown-unknown -O2 -nostdlib -fno-builtin
@@ -38,38 +38,34 @@ component(AppButton, props, AppButtonProps) {
     ThemeValue theme = useContext(ThemeContext);
 
     return button(
-        PropsOf(
-            If(props.domId != 0, id(props.domId)),
-            type("button"),
-            disabled(props.isDisabled),
-            onClick(props.onPress),
-            class(U(RoundedXl, Px(4), Py(2), TextSm, Cursor("pointer"))),
-            classIf(strEq(props.tone, "primary"), BgSlate900, FgWhite, Hover(BgSlate700)),
-            classIf(strEq(props.tone, "danger"), BgRed600, FgWhite, Hover(BgRed700)),
-            classIf(strEq(props.tone, "plain"), BgWhite, FgSlate900, BorderSlate300),
-            classIf(props.isDisabled, Opacity60),
-            classIf(theme.compact, Px(3), Py(1))
-        ),
+        If(props.domId != 0, id(props.domId)),
+        type("button"),
+        disabled(props.isDisabled),
+        onClick(props.onPress),
+        class(U(RoundedXl, Px(4), Py(2), TextSm, Cursor("pointer"))),
+        classIf(strEq(props.tone, "primary"), BgSlate900, FgWhite, Hover(BgSlate700)),
+        classIf(strEq(props.tone, "danger"), BgRed600, FgWhite, Hover(BgRed700)),
+        classIf(strEq(props.tone, "plain"), BgWhite, FgSlate900, BorderSlate300),
+        classIf(props.isDisabled, Opacity60),
+        classIf(theme.compact, Px(3), Py(1)),
         props.label
     );
 }
 
 typedef struct {
     const char *label;
-    i32 amount;   /* numbers as i32 props: the child formats via text() */
+    i32 amount; /* numbers as i32 props: the child formats via Text() */
     i32 warn;
 } StatPillProps;
 
 component(StatPill, props, StatPillProps) {
     return div(
-        PropsOf(class(U(RoundedXl, BorderSlate200, BgWhite, Px(4), Py(3), Flex, FlexCol, Gap(1)))),
-        span(PropsOf(class(U(TextXs, FgSlate500))), props.label),
+        class(U(RoundedXl, BorderSlate200, BgWhite, Px(4), Py(3), Flex, FlexCol, Gap(1))),
+        span(class(U(TextXs, FgSlate500)), props.label),
         strong(
-            PropsOf(
-                class(U(TextLg, FontSemibold)),
-                classIf(props.warn, FgAmber500),
-                classIf(!props.warn, FgSlate900)
-            ),
+            class(U(TextLg, FontSemibold)),
+            classIf(props.warn, FgAmber500),
+            classIf(!props.warn, FgSlate900),
             Text(props.amount)
         )
     );
@@ -85,10 +81,10 @@ typedef struct {
 
 component(Header, props, HeaderProps) {
     return header(
-        PropsOf(class(U(Flex, FlexCol, Gap(2)))),
-        p(PropsOf(class(U(TextXs, FgSlate500))), props.appName),
-        h1(PropsOf(class(U(Text4xl, FontBold, FgSlate900))), props.title),
-        p(PropsOf(class(U(TextSm, FgSlate600))), props.subtitle)
+        class(U(Flex, FlexCol, Gap(2))),
+        p(class(U(TextXs, FgSlate500)), props.appName),
+        h1(class(U(Text4xl, FontBold, FgSlate900)), props.title),
+        p(class(U(TextSm, FgSlate600)), props.subtitle)
     );
 }
 
@@ -102,9 +98,9 @@ component(Page, props, PageProps) {
     ThemeValue theme = useContext(ThemeContext);
 
     return main(
-        PropsOf(class(U(Block, BgSlate100, FgSlate900, Px(6), Py(8)))),
+        class(U(Block, BgSlate100, FgSlate900, Px(6), Py(8))),
         div(
-            PropsOf(class(U(MaxW(200), MxAuto, Flex, FlexCol, Gap(5)))),
+            class(U(MaxW(200), MxAuto, Flex, FlexCol, Gap(5))),
             Header(Props(HeaderProps,
                 .title = props.title,
                 .subtitle = props.subtitle,
@@ -123,12 +119,10 @@ typedef struct {
 
 component(Card, props, CardProps) {
     return section(
-        PropsOf(
-            class(U(RoundedXl, BorderSlate200, BgWhite, Pad(5), Flex, FlexCol, Gap(4))),
-            props.rootExtra
-        ),
+        class(U(RoundedXl, BorderSlate200, BgWhite, Pad(5), Flex, FlexCol, Gap(4))),
+        props.rootExtra,
         If(props.title && props.title[0],
-            h2(PropsOf(class(U(TextLg, FontSemibold, FgSlate900))), props.title)),
+            h2(class(U(TextLg, FontSemibold, FgSlate900)), props.title)),
         props.children
     );
 }
@@ -141,7 +135,7 @@ typedef struct {
 
 component(StatsGrid, props, StatsGridProps) {
     return div(
-        PropsOf(class(U(Grid, GridCols4, Gap(3)))),
+        class(U(Grid, GridCols4, Gap(3))),
         StatPill(Props(StatPillProps, .label = "Total", .amount = props.stats.total)),
         StatPill(Props(StatPillProps, .label = "Open", .amount = props.stats.open)),
         StatPill(Props(StatPillProps, .label = "Done", .amount = props.stats.done)),
@@ -168,16 +162,14 @@ component(TaskComposer, props, TaskComposerProps) {
         .title = "Add task",
         .children = Children(
             div(
-                PropsOf(class(U(Flex, Gap(2)))),
+                class(U(Flex, Gap(2))),
                 input(
-                    PropsOf(
-                        id("task-title"),
-                        type("text"),
-                        value(props.draftTitle),
-                        onInput(props.onTitleInput),
-                        placeholder("What needs doing?"),
-                        class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
-                    )
+                    id("task-title"),
+                    type("text"),
+                    value(props.draftTitle),
+                    onInput(props.onTitleInput),
+                    placeholder("What needs doing?"),
+                    class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
                 ),
                 AppButton(Props(AppButtonProps,
                     .label = "Add",
@@ -188,8 +180,8 @@ component(TaskComposer, props, TaskComposerProps) {
                 ))
             ),
             div(
-                PropsOf(class(U(Flex, Gap(2), ItemsCenter))),
-                span(PropsOf(class(U(TextSm, FgSlate600))),
+                class(U(Flex, Gap(2), ItemsCenter)),
+                span(class(U(TextSm, FgSlate600)),
                     text("Priority: %d", props.priority)),
                 AppButton(Props(AppButtonProps,
                     .label = "Cycle priority",
@@ -213,10 +205,10 @@ typedef struct {
 
 component(Toolbar, props, ToolbarProps) {
     return div(
-        PropsOf(class(U(Flex, Gap(2), ItemsCenter, JustifyBetween))),
+        class(U(Flex, Gap(2), ItemsCenter, JustifyBetween)),
         div(
-            PropsOf(class(U(Flex, Gap(2), ItemsCenter))),
-            span(PropsOf(class(U(TextSm, FgSlate600))),
+            class(U(Flex, Gap(2), ItemsCenter)),
+            span(class(U(TextSm, FgSlate600)),
                 text("Filter: %s", Filter_Label(props.filter))),
             AppButton(Props(AppButtonProps,
                 .label = "Next filter",
@@ -248,25 +240,21 @@ component(TaskRow, props, TaskRowProps) {
     const Task *task = props.task;
 
     return div(
-        PropsOf(
-            class(U(Flex, ItemsCenter, JustifyBetween, Gap(3), RoundedXl,
-                    BorderSlate200, BgWhite, Px(4), Py(3))),
-            classIf(task->done, Opacity60)
-        ),
+        class(U(Flex, ItemsCenter, JustifyBetween, Gap(3), RoundedXl,
+                BorderSlate200, BgWhite, Px(4), Py(3))),
+        classIf(task->done, Opacity60),
         div(
-            PropsOf(class(U(Flex, FlexCol, Gap(1)))),
+            class(U(Flex, FlexCol, Gap(1))),
             span(
-                PropsOf(
-                    class(U(TextSm, FontSemibold, FgSlate900)),
-                    classIf(task->done, LineThrough)
-                ),
+                class(U(TextSm, FontSemibold, FgSlate900)),
+                classIf(task->done, LineThrough),
                 task->title
             ),
-            span(PropsOf(class(U(TextXs, FgSlate500))),
+            span(class(U(TextXs, FgSlate500)),
                 text("Priority %d - %s theme", task->priority, theme.accentName))
         ),
         div(
-            PropsOf(class(U(Flex, Gap(2)))),
+            class(U(Flex, Gap(2))),
             AppButton(Props(AppButtonProps,
                 .label = task->done ? "Reopen" : "Done",
                 .tone = "plain",
@@ -286,28 +274,34 @@ component(TaskRow, props, TaskRowProps) {
 /* -------------------------------------------------------------- task list */
 
 typedef struct {
-    const TaskStore *store;
-    TaskFilter filter;
-    Handler onToggleTask;
+    const TaskStore *store; /* immutable-ish input state */
+    TaskFilter filter;      /* view state */
+    Handler onToggleTask;   /* behavior */
     Handler onRemoveTask;
 } TaskListProps;
 
 component(TaskList, props, TaskListProps) {
+    i32 visible = TaskStore_CountMatching(props.store, props.filter);
+
     return Card(Props(CardProps,
         .title = "Tasks",
         .children = Children(
-            IfElse(props.store->count == 0,
-                p(PropsOf(class(U(TextSm, FgSlate500))), "No tasks yet."),
+            IfElse(visible == 0,
+                p(class(U(TextSm, FgSlate500)),
+                    IfElse(props.store->count == 0,
+                        Text("No tasks yet."),
+                        text("No %s tasks.", Filter_Label(props.filter)))),
                 div(
-                    PropsOf(class(U(Flex, FlexCol, Gap(2)))),
-                    mapKeyed(task, props.store->items, props.store->count, task->id,
-                        If(Task_MatchesFilter(task, props.filter),
-                            TaskRow(Props(TaskRowProps,
-                                .task = task,
-                                .onToggle = withI32(props.onToggleTask, task->id),
-                                .onRemove = withI32(props.onRemoveTask, task->id),
-                            ))))
-                ))
+                    class(U(Flex, FlexCol, Gap(2))),
+                    mapKeyedIf(task, props.store->items, props.store->count,
+                        task->id,
+                        Task_MatchesFilter(task, props.filter),
+                        TaskRow(Props(TaskRowProps,
+                            .task = task,
+                            .onToggle = bindI32(props.onToggleTask, task->id),
+                            .onRemove = bindI32(props.onRemoveTask, task->id),
+                        ))))
+            )
         ),
     ));
 }
@@ -326,11 +320,11 @@ component(DebugPanel, props, DebugPanelProps) {
         .title = "Debug",
         .rootExtra = propGroup(BgSlate50),
         .children = Children(
-            p(PropsOf(class(U(TextXs, FgSlate500))),
+            p(class(U(TextXs, FgSlate500)),
                 text("Render count: %d", props.renderCount)),
-            p(PropsOf(class(U(TextXs, FgSlate500))),
+            p(class(U(TextXs, FgSlate500)),
                 text("Last changed task id: %d", props.lastChangedTaskId)),
-            p(PropsOf(class(U(TextXs, FgSlate500))),
+            p(class(U(TextXs, FgSlate500)),
                 text("Filter changed from %s to %s",
                     Filter_Label(props.previousFilter),
                     Filter_Label(props.currentFilter)))
@@ -441,7 +435,7 @@ component(DashboardApp, props, DashboardAppProps) {
                 )),
 
                 Show(stats.highPriorityOpen > 0,
-                    p(PropsOf(id("high-priority-warning"), class(U(TextSm, FgAmber500))),
+                    p(id("high-priority-warning"), class(U(TextSm, FgAmber500)),
                         text("%d high-priority task(s) still open.", stats.highPriorityOpen))),
 
                 DebugPanel(Props(DebugPanelProps,

@@ -42,6 +42,7 @@ void TaskStore_ClearDone(TaskStore *store);
 
 TaskStats TaskStore_Stats(const TaskStore *store);
 bool Task_MatchesFilter(const Task *task, TaskFilter filter);
+bi32 TaskStore_CountMatching(const TaskStore *store, TaskFilter filter);
 
 const char *Filter_Label(TaskFilter filter);
 TaskFilter Filter_Next(TaskFilter filter);

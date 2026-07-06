@@ -1,6 +1,6 @@
 /* starter-c: GoWebComponents shorthand for C (gwbc.h).
- * Declarative builders, prop options, hooks, conditional nodes, fn-based
- * lists, utility styling with hover, painless composition.
+ * Declarative builders, hooks, conditional nodes, fn-based lists,
+ * utility styling with hover, painless composition.
  *
  * Build: scripts\build-c.cmd examples\starter-c\starter.c renderer\starter-c.wasm
  */
@@ -18,36 +18,34 @@ typedef struct {
     Handler onIncrement;
 } CounterPanelProps;
 
-/* Boring C render function — the GWC-style answer to inline closures. */
+/* Boring C render function - the GWC-style answer to inline closures. */
 static Node renderDot(i32 i) {
     (void)i;
-    return span(props(class(U(TextSm, FgAmber500))), "*");
+    return span(class(U(TextSm, FgAmber500)), "*");
 }
 
 component(CounterPanel, props, CounterPanelProps) {
     return div(
-        props(class(U(Flex, FlexCol, Gap(3), RoundedXl, BorderSlate200, BgWhite, Pad(5)))),
+        class(U(Flex, FlexCol, Gap(3), RoundedXl, BorderSlate200, BgWhite, Pad(5))),
 
-        p(props(class(U(TextSm, FgSlate600))),
+        p(class(U(TextSm, FgSlate600)),
             text("Hello, %s.", props.name)),
 
-        p(props(class(U(TextLg, FontSemibold, FgSlate900))),
+        p(class(U(TextLg, FontSemibold, FgSlate900)),
             text("Count: %d", props.count)),
 
-        p(props(class(U(TextSm, FgSlate500))),
+        p(class(U(TextSm, FgSlate500)),
             text("Previous count: %s", props.previousCount)),
 
-        div(props(class(U(Flex, Gap(1)))),
+        div(class(U(Flex, Gap(1))),
             Range(minI32(props.count, 20), renderDot)),
 
         button(
-            props(
-                id("increment"),
-                type("button"),
-                onClick(props.onIncrement),
-                class(U(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm,
-                        Cursor("pointer"), Hover(BgSlate700)))
-            ),
+            id("increment"),
+            type("button"),
+            onClick(props.onIncrement),
+            class(U(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm,
+                    Cursor("pointer"), Hover(BgSlate700))),
             "Increment"
         )
     );
@@ -72,33 +70,31 @@ component(StarterApp, props, StarterAppProps) {
     }
 
     return main(
-        props(class(U(Block, BgSlate100, Px(6), Py(12), FgSlate900, RoundedXl, MaxW(120)))),
+        class(U(Block, BgSlate100, Px(6), Py(12), FgSlate900, RoundedXl, MaxW(120))),
 
         div(
-            props(class(U(Flex, FlexCol, Gap(6)))),
+            class(U(Flex, FlexCol, Gap(6))),
 
-            h1(props(class(U(Text4xl, FontBold))), props.title),
+            h1(class(U(Text4xl, FontBold)), props.title),
 
             p(
-                props(class(U(TextSm, FgSlate600))),
+                class(U(TextSm, FgSlate600)),
                 "A starter that uses C components, markup helpers, utility styling, "
                 "state, events, composition, and reactive text."
             ),
 
             input(
-                props(
-                    id("name-input"),
-                    type("text"),
-                    value(name),
-                    onInput(updateName),
-                    placeholder("Who is using the app?"),
-                    class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
-                )
+                id("name-input"),
+                type("text"),
+                value(name),
+                onInput(updateName),
+                placeholder("Who is using the app?"),
+                class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
             ),
 
             If(name[0] == 0,
                 p(
-                    props(class(U(TextSm, FgAmber500))),
+                    class(U(TextSm, FgAmber500)),
                     "Tip: enter a name to personalize the panel."
                 )
             ),
@@ -111,7 +107,7 @@ component(StarterApp, props, StarterAppProps) {
             )),
 
             p(
-                props(class(U(TextXs, FgSlate500))),
+                class(U(TextXs, FgSlate500)),
                 text("Current count is %d", count)
             )
         )

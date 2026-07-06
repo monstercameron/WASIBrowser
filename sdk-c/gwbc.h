@@ -11,16 +11,15 @@
  *   Range(n, render_fn)     fn-based lists: static Node render(i32 i)
  *   Maybe(ptr, render_fn)   render if non-NULL
  *   Prevent(h) / Stop(h)    handler wrappers (preventDefault/stopPropagation)
- *   PropsOf(...)            prop grouping (additive)
  *
  * Layer 2 — ergonomic authoring aliases (lowercase; components PascalCase):
  *   component(Name, props, PropsType) { ... return view(...); }
  *   Comp(Props(CompProps, .field = v))      direct component calls (no child())
  *   app(Root, { ... })                      exports
  *   div/p/h1/button/input/span/...          variadic tags; bare strings become text
- *   props(...) / class(...) / css(...)      grouping (pure splats, zero runtime)
+ *   class(U(...)) + attrs go directly in    (no props() wrapper — removed)
  *   text("Count: %d", count)                reactive text (mini printf: %s %d %%)
- *   mapRange(i, n, node) / map(it, arr, n, node) / mapKeyed(...)     expr lists
+ *   mapRange/map/mapKeyed/mapKeyedIf, bindI32(handler, i32)          lists
  *   stateI32/stateBool/stateStr, set(name, v), previousI32           hooks
  *   event(name){...} / eventInput(name, e){...}, onClick/onInput     handlers
  *   id("...") type/value/placeholder(...)   attributes
@@ -336,9 +335,10 @@ static u32 gc_hp_base[192]; static i32 gc_hp_payload[192];
 static u32 gc_hp_count;
 static i32 gc_event_payload;
 
-/* withI32(onToggleTask, task->id): bind an i32 payload to a handler for this
- * render. The receiving event reads it via eventI32(name, arg). */
-static Handler withI32(Handler h, i32 payload) {
+/* bindI32(onToggleTask, task->id): EAGERLY bind an i32 payload to a handler
+ * for this render. Lightweight: one slot in a per-render table, no allocation,
+ * no cleanup. The receiving event reads it via eventI32(name, arg). */
+static Handler bindI32(Handler h, i32 payload) {
     if (gc_hp_count >= 192) gwbc_panic("gwbc: payload handler table full (192)");
     gc_hp_base[gc_hp_count] = h;
     gc_hp_payload[gc_hp_count] = payload;
@@ -721,6 +721,16 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
         gc_append(gc__f, (node_expr)); \
     } \
     gc__f; }))
+/* Filter + map in one: renders node_expr only for items where cond_expr
+ * holds. Keeps call sites from nesting If inside mapKeyed. */
+#define mapKeyedIf(item, array, len, key_expr, cond_expr, node_expr) (__extension__({ \
+    Node gc__f = gc_alloc(K_GROUP); \
+    for (u32 gc__i = 0; gc__i < (u32)(len); gc__i++) { \
+        __auto_type item = &(array)[gc__i]; \
+        (void)(key_expr); \
+        if (cond_expr) gc_append(gc__f, (node_expr)); \
+    } \
+    gc__f; }))
 
 /* -- hooks -- */
 #define stateI32(name, initial) i32 name = gwbc_use_i32(#name, (initial))
@@ -789,9 +799,10 @@ static Node gwbc_text_i32(i32 v) {
 #define text(...) Textf(__VA_ARGS__)
 #define Children(...) frag(__VA_ARGS__)
 
-/* -- prop grouping (pure splats: additive by construction, zero runtime) -- */
-#define props(...) __VA_ARGS__
-#define PropsOf(...) __VA_ARGS__
+/* -- prop grouping (pure splats: additive by construction, zero runtime).
+ * Attributes/handlers/classes go DIRECTLY into elements:
+ *   div(class(U(Flex, Gap(2))), id("x"), onClick(h), children...)
+ * (props()/PropsOf() wrappers existed and were removed: pure ceremony.) */
 #define class(...) __VA_ARGS__
 #define css(...) __VA_ARGS__
 #define U(...) __VA_ARGS__ /* utility token group, class(U(Flex, Gap(2))) */

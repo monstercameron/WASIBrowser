@@ -87,6 +87,15 @@ TaskStats TaskStore_Stats(const TaskStore *store) {
     return stats;
 }
 
+bi32 TaskStore_CountMatching(const TaskStore *store, TaskFilter filter) {
+    if (!store) return 0;
+    bi32 n = 0;
+    for (bi32 i = 0; i < store->count; i++) {
+        if (Task_MatchesFilter(&store->items[i], filter)) n++;
+    }
+    return n;
+}
+
 bool Task_MatchesFilter(const Task *task, TaskFilter filter) {
     if (!task) return false;
     switch (filter) {
