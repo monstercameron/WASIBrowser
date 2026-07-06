@@ -363,3 +363,35 @@ remaining blocker or major *design* hole. What that does and does not mean, hone
 So: the *plan* is done and defensible. The *proof* is in P0–P5 (§8) — and the
 honest scorecard still multiplies the 8.7 design ceiling by the maturity and
 adoption discounts, which only building collapses.
+
+---
+
+# Part III — the design-maturity meta-rubric (a DIFFERENT rubric, honestly)
+
+Part I/II score **deployed reality** (37 dims), where 10-across is a vanity
+target (adoption/maturity discounts). This third rubric scores **spec/design
+quality** on the 8 axes an architecture reviewer used — and here 10/10 IS a
+legitimate goal, because these measure the *document*, not the deployment.
+After the formalization pass (constitution, C/D/V/U ladders, WVEP threat model
++ tiers + reputation + truth-in-pricing + failure receipts, phase acceptance
+contracts, prior-art sharpening, spec-family scaffold):
+
+| Axis | pre-review | draft-10 | Gap to 10 (what's LEFT — honest) |
+|---|---|---|---|
+| Vision | 9 | **10** | constitution added; nothing left |
+| Security posture | 8 | **9** | C-ladder/must-never/gates in doc; the normative adversary matrix + test vectors are P0 authoring (`docs/01-WEB-SECURITY.md` stub) |
+| Architecture | 8.5 | **9** | objects indexed (§15) + ladders formal; normative CDDL schemas are P0 |
+| Adoption realism | 7 | **8** | personas + acceptance contracts added; reach is a structural cap (needs the native runtime / extension traction) |
+| Naming UX | 6.5 | **7** | ladders + first-contact ceremony designed; the number is *gated on the P0 usability study* — unproven, honestly not 10 |
+| Monetization / WVEP | 8 | **9** | threat model + V-tiers + broker reputation + truth-in-pricing + failure receipts + no-moral-laundering added; real settlement rails are P3 build |
+| Implementation path | 7.5 | **9** | phases are now acceptance-tested release contracts; the tests must actually be *run* (build) |
+| Document structure | 5.5 | **8** | split scaffolded (index + WEB-VALUE.md written + WEB-SECURITY stub) + glossary + schema index + diagrams; the remaining ~10 specs are P0 extraction |
+
+**The honest last mile.** These refinements took the design-maturity axes from
+a ~7.5 mean to a **~8.6 mean** — and the gap from there to a clean 10 on each
+is **execution, not more design**: author the P0 spec family (`docs/`), write
+the normative CDDL + test vectors, and — the one that gates everything —
+**run the P0 identity-UX study**. I will not score Naming-UX, the schemas, or
+the split a 10 while they are designed-but-unbuilt; that would be the exact
+vanity metric Part II's postscript warns against. The design is at its ceiling;
+the proof is P0.

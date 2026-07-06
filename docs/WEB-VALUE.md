@@ -227,3 +227,66 @@ as all of next.0: replace hidden ambient cost with explicit, bounded,
 receipted exchange. WVEP's job is not to decide which cost is morally best —
 it's to make every cost explicit, bounded, consented, metered, auditable,
 revocable, and settled.
+
+---
+
+## 13.8 Value-risk tiers (V-ladder) and default policy
+
+Every value class carries a risk tier that drives default policy:
+
+```
+V0 payment/entitlement         V4 bandwidth, public chunks
+V1 sponsor, no tracking        V5 human judgment, low-sensitivity
+V2 storage, public/encrypted   V6 crypto / GPU-N/A / networked / sensitive — HIGH
+V3 useful CPU compute
+```
+
+Policy: **V0–V2 low** (allow within caps), **V3–V4 medium** (allow, metered,
+visible), **V6 high** (opt-in + trusted-chrome disclosure + battery-off +
+instantly killable). Categories `credential-attack / DDoS / proxying /
+surveillance / malware / unknown-networked` are **blocked by default**, never
+merely "asked." A capability needing trust runs only at C1/C2+ (§10.3), never
+under a C4 bare name.
+
+## 13.9 Broker reputation (accountability without a chain)
+
+A broker is not trusted; it is *accountable*. The browser keeps a local broker
+score and shows it before use:
+
+```
+Broker score keys:  invalid-receipt rate · rejected-work rate · user complaints
+                    · hidden-category violations · over-budget attempts
+                    · worker revocations · settlement-failure rate
+
+  Broker: OpenCompute · trusted · settlement reliability 99.8% · violations: none
+```
+
+A broker that fakes receipts, over-runs budgets, or mislabels categories drops
+out of the user's accepted set — the "slashing" is loss of accepted-broker
+status, no token required.
+
+## 13.10 Truth-in-pricing (a named WVEP invariant)
+
+Every offer MUST disclose, before the user chooses: site recipient · broker ·
+buyer/sponsor (if any) · estimated cost · (after) actual metered cost ·
+whether tracking occurs · whether identity is disclosed · whether crypto is
+involved · whether the network is used. No option may render "free" unless the
+real cost is genuinely zero. This is the WVEP counterpart to §10 R1.
+
+## 13.11 Failure receipts (greed is auditable even when nothing unlocks)
+
+Even an aborted/failed session produces a **local** `ValueSessionFailureReceipt`
+`{ site, broker, reason, cost_already_consumed, attempted_overrun? }`. It never
+unlocks anything, but it lets the greed ledger (§13.3) surface sites that
+burn user resources without delivering, and sites that repeatedly try to
+exceed their declared budget.
+
+## 13.12 No moral laundering (the honest boundary)
+
+> **WVEP bounds and meters value exchange. It does NOT certify the buyer's
+> purpose is good.** Brokers are accountable for their *category* claims and
+> browsers enforce *user policy* — but the protocol cannot vouch that a
+> compute job, a crypto network, a judgment task, or a sponsor is ethical or
+> legal. That fitness is a reputation/policy problem (mirrors §10.4: "the
+> protocol verifies *who* answered, not that the answer is *fair*"), stated
+> plainly rather than laundered behind "it's just compute."

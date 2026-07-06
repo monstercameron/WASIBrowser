@@ -1,5 +1,5 @@
 # WebNext — the overview & manifesto (for WASIBrowser)
-### Plan draft 9 — SHIP (8-round adversarial review, 2 independent verdicts). This doc is the INDEX; normative specs split out per the spec-family map below.
+### Plan draft 10 — SHIP + formalization pass (constitution, C/D/V/U ladders, WVEP threat model, acceptance contracts, spec-family scaffold). §0-§20.
 
 *(Naming: **WebNext** is the product/protocol; **"next.0"** is the protocol
 generation, not the label. WASIBrowser is the reference runtime.)*
@@ -37,12 +37,35 @@ speculation.
 
 ## 0. North Star
 
+> **WebNext is not a decentralized DNS. It is a verified application runtime
+> where naming, search, gateways, brokers, and peers are untrusted discovery
+> and delivery layers.** (Say this before anything else — it pre-empts the
+> single most common misread.)
+
+### The Constitution (canonical; every subsystem cites the rule it satisfies)
+
+```
+1. Location is not trust.
+2. Content hashes and publisher keys are trust.
+3. Discovery may be social; execution must be verified.
+4. Apps receive capabilities, never ambient authority.
+5. Users own identity, storage, permissions, and value exchange.
+6. Every cost is explicit: money, attention, compute, storage, bandwidth,
+   labor, privacy.
+7. Gateways, names, peers, indexes, sponsors, brokers, services: helpful,
+   never trusted.
+8. The browser host is the security kernel.
+```
+
+Everything below is one operating philosophy, not many cool systems. Each
+section notes which rule(s) it enforces.
+
 WASIBrowser is not a faster webview and not a JavaScript replacement. It is a
 different **contract** between applications, users, services, and the
 network. One sentence unifies the entire document:
 
 > **The current web made LOCATION the root of trust.
-> next.0 makes VERIFIABLE IDENTITY and CONTENT the root of trust.**
+> next.0 makes VERIFIABLE IDENTITY and CONTENT the root of trust.** *(Rules 1–2)*
 
 `https://example.com/app` means: trust DNS, trust the CA tree, trust the
 server, trust the current deployment, trust cookies/session, and trust that
@@ -1440,6 +1463,8 @@ C2  a.b.c delegation   verified signature chain   good — C2-equiv per link;
                                                    C2, a bare top = C4)
 C3  @petname           your own pinned binding    good after first pin
 C4  bare name          ambiguous discovery        NOT TRUSTED — search-like
+C5  dns:<name.tld>     legacy web surface         quarantined — old-web rules,
+                                                  not a native identity (§1a)
 ```
 
 **Bare names (C4) must never get the same chrome as pinned identities.** Not
@@ -1702,6 +1727,9 @@ ask "how is this not X?" on sight. Honest lineage + the actual differentiator:
 | **Solid** | user-owned data, decoupled from apps | binary DOM ABI + capability sandbox + no-JS + content addressing; Solid is data-pods over the *existing* web stack (HTTP/JS/OAuth), which is the stack next.0 replaces |
 | **DID / Verifiable Credentials** | decentralized keys as identity | a concrete runtime, naming ergonomics, and distribution; DIDs are an identity spec, not a web |
 | **BitTorrent** | swarm distribution, fountain-adjacent | verification-as-trust, mutable identities, RPC, an app model; BT moves files, full stop |
+| **ENS / Handshake** | decentralized naming | next.0 names are **non-property hints over keys** (non-exclusive, non-transferable, free) — not tokenized/auctioned/exclusive assets; no coin, no scarcity market |
+| **Chrome PWA** | installable web apps | still JS + origin + cookies + CA-TLS + server-location trust; next.0 replaces all five — a PWA is the *old* trust model in an app costume |
+| **Electron / Tauri** | package a web app as a desktop binary | a packaging model over the same web stack, not a new trust/distribution/identity protocol; next.0 is the protocol, not the wrapper |
 
 **The one-line differentiator:** the prior art is almost all *distribution or
 naming or identity* layers. next.0 is an **application runtime with a
@@ -1818,3 +1846,180 @@ Complete a WVEP value session (browser-mediated, receipted)
         broker: verify contribution --> sign ValueReceipt (metered cpu/wall; energy=est.)
         site: verify receipt sig + offer-hash --> unlock ; host: log per-site cost
 ```
+
+## 17. Ceiling-raising design additions (from the uplift analysis)
+
+An adversarial uplift review found most sub-10 ratings are gated by *building*
+or *adoption* (which spec text can't move) or are genuine structural tradeoffs
+(§17.8) — but it isolated **seven design moves that are free now and raise the
+ceiling** on the weakest dimensions. Each is adopted and homed:
+
+- **17.1 Accessibility semantic ABI (Tier-0, peer to the DOM ABI).** The DOM
+  ABI gains a **binary accessibility tree** — roles / states / labels /
+  relations as first-class ops, not a bolted-on afterthought — so AT consumes
+  a structured tree over the same fast boundary. a11y as a Tier-0 peer, not a
+  Tier-2 nicety. *(runtime layer / §0b invariants)*
+- **17.2 `WEB-PACKAGES.md` — dependencies as `ed:`/`b3:` refs.** A dependency
+  is an `ed:` (or pinned `b3:`) reference riding the *existing* manifest +
+  lifecycle + verification + capability machinery — a lib is a signed bundle,
+  a version is a `seq`, a malicious dep is capability-bounded by the importer's
+  grants. Reuses everything already specified; the one build-unlock that starts
+  the tooling flywheel. *(new spec-family doc)*
+- **17.3 `dev:` — an unsigned, local-only fast-iteration authority.** Publish
+  requires signing+hashing, which raises the authoring floor. A `dev:`
+  authority is unsigned, local-only, **non-shareable** (refuses to resolve
+  off-machine), skips the sign/hash inner loop, and is **loudly banner-labeled**
+  so it can't be confused with a verified publish — restoring the web's
+  notepad-and-refresh floor without weakening anything shipped. *(§0c/§1)*
+- **17.4 Build provenance (SLSA/Sigstore-style) on manifests.** Optional
+  **multi-signer build-provenance**: a reproducible-build attestation
+  (source→bundle) verified at install, distinct from the release signature —
+  "signed by the key" becomes "signed AND built from attested source by an
+  attested toolchain." *(§2b/§10.5)*
+- **17.5 Canonical common interface schemas.** Versioned canonical RPC
+  interfaces (`contacts.v1`, `documents.v1`, `tasks.v1`, `calendar.v1`, …),
+  interface-id = `b3:` of the schema (§4), shipped in a forkable defaults-style
+  object — so cross-app interop is *real*, not merely "possible over RPC." *(§4)*
+- **17.6 Host-owned, non-interceptable exit/cancel gesture (Tier-0).** A
+  universal exit/cancel **no app can trap, hide, delay, or fake**,
+  browser-native like the identity chip — structurally killing forced-
+  continuity / hidden-close / fake-urgency dark patterns the way trusted chrome
+  kills phishing. (Copy-level dark patterns stay out of protocol scope.) *(§10.6)*
+- **17.7 `compiled` attestation chunk kind.** A bundle may carry a signed,
+  **reproducible-build-attested** AOT/native artifact keyed by `(wasm_hash,
+  target_triple, compiler_version)`, verified *independently* of the wasm bytes
+  (no reproduce → discard, fall back to JIT) — so even a *first-ever* load skips
+  compilation. *(§2, alongside the compile cache)*
+
+### 17.8 What these do NOT do (the honest ceiling — two rubrics)
+
+There are **two rubrics** and they answer differently:
+- The **design-maturity rubric** (Vision / Security-posture / Architecture /
+  Adoption-realism / Naming-UX / Monetization / Impl-path / Doc-structure)
+  measures *spec quality* — 10/10 there **is** an honest, reachable goal, and
+  the formalizations in §17–§20 + the spec-family split are how it's reached.
+- The **37-dimension web-vs-web-2.0 rubric** measures *deployed reality* —
+  10/10-across-the-board there **is a vanity target**, because two discounts
+  don't move with spec text (maturity: realized ≈ 2 until built; adoption:
+  reach/ecosystem/decentralization gated by years of third-party traction),
+  and three dimension-classes are permanently sub-10 by construction:
+  (1) real tradeoffs both can't win — max zero-install reach requires *no* new
+  runtime, the opposite of mandatory verification; max first-contact smoothness
+  contradicts phishing-resistance (that's *why* the C4 chooser exists);
+  (2) years-of-third-parties dimensions (tooling breadth, discoverability,
+  realized decentralization, standards adoption);
+  (3) never-legitimately-10 (monetization *health* = every incentive
+  user-aligned forever, unsolved by any economic system; a legitimately-signed-
+  but-malicious publisher is a reputation limit no protocol removes).
+
+The honest target after every achievable move: ~13 crypto-structural
+dimensions legitimately reach **9–10** (the ones the current web scores
+*worst* on — the bet paying off), ~10–12 land at a strong **7–8** once built,
+~8–10 have a permanent **6–8** ceiling. Max the design levers now (free);
+build milestones raise *realized*, not *ceiling*; adoption-gated dimensions are
+**a bet, not a roadmap item**.
+
+## 18. The formal ladders (C / D / V / U)
+
+Making the trust/risk gradients explicit and enumerable turns "good claims"
+into an auditable, testable system. Four ladders, each a first-class classifier
+the chrome and policy engine key on:
+
+**Certainty (C) — how much the chrome trusts an authority (§10.3):**
+```
+C0  b3:<hash>       exact immutable bytes        (no trust decision)
+C1  ed:<key>        signed publisher identity
+C2  name~keytag     pinned human identity
+C3  @petname        your own local binding
+C4  bare name       social/search/namespace lookup — NOT trusted, a chooser
+C5  dns:<name.tld>  legacy web surface — quarantined, its own trust rules
+```
+> Dangerous capabilities (payments, identity-sharing, private profiles, WVEP
+> V3+) require **C1/C2 or better** — never C4/C5.
+
+**Data durability (D) — declared per app, shown as a chip (§2b):**
+```
+D0 no durable user data      D4 continuous signed export
+D1 local-only                D5 user-owned storage backend
+D2 remote, no export         D6 replicated / multi-operator service
+D3 manual export
+```
+> Export ABI: `gwb.data_export() -> b3 set`, `gwb.data_import(b3 set)`,
+> `gwb.data_snapshot() -> signed checkpoint`. `D2` is legal but *loud*
+> ("if the operator vanishes, your data may be lost"); the good tiers compete.
+
+**Value risk (V) — WVEP class → default policy (WEB-VALUE.md):**
+```
+V0 payment/entitlement          V4 bandwidth, public chunks
+V1 sponsor, no tracking         V5 human judgment, low-sensitivity
+V2 storage, public/encrypted    V6 crypto / networked / sensitive — HIGH, opt-in
+V3 useful CPU compute
+```
+> V0–V2 low, V3–V4 medium, V6 high (opt-in + trusted-chrome disclosure + battery
+> off). Credential-attack / DDoS / surveillance / malware categories are
+> **blocked by default**, never merely "asked."
+
+**Update risk (U) — the §11.6 diff → action:**
+```
+U0 same publisher + same perms   → Auto-safe (silent)
+U1 code changed only             → Auto-safe
+U2 storage migration             → Ask (backup/reversibility shown)
+U3 new RPC/service               → Ask
+U4 new identity/payment/value    → Ask
+U5 key rotation / recovery change→ Ask, visible approval
+U6 revoked / suspicious / hash-mismatch → Block
+```
+
+## 19. Phases are acceptance-tested release contracts (§8 sharpened)
+
+Each phase "is complete only if these pass" — not "does X." (Full test vectors
+land in `TEST-VECTORS/`; no object is real until its invalid examples exist.)
+
+- **P0**: WEB-SECURITY.md + canonical schemas compile; identity-chrome
+  prototype built; **≥20-user phishing/impersonation study** run and passing
+  its bar (§5-below); P1 bundle/manifest schema frozen.
+- **P1**: `web new` scaffolds; `web pack` is deterministic; `web open
+  web://b3:` verifies + runs; a corrupt chunk **hard-stops**; offline relaunch
+  works; compile cache works; Task Manager shows CPU/mem; identity chip shows
+  exact bundle state. **QoL is release-blocking, not later** (gate + chip +
+  task manager ship with the first app).
+- **P2**: `web publish` writes an `ed:` manifest; delta update moves only
+  changed chunks; `stale_after` fires; sunset banner appears; rollback works;
+  a U3+ permission diff pauses install; key rotation needs visible approval.
+- **P3**: RPC via host import; service identity verified; interface hash
+  enforced; app-scoped identity generated; endpoint moves without app update;
+  successor-key handoff works; one real broker + one real settlement rail move
+  actual money.
+- **P3.5**: ValueOffer validates; pay / sponsor / compute each unlock; the
+  compute worker cannot touch DOM/network/files; kill switch works; greed
+  ledger updates; battery policy blocks compute by default.
+
+## 20. Spec-family split + schemas + test vectors (the highest-leverage next move)
+
+The doc-structure axis reaches 10 only by splitting into a suite. The layout
+is committed under `docs/` as the P0 deliverable (this file stays the
+overview/index):
+
+```
+docs/
+  00-WEBNEXT-OVERVIEW.md   (this file's role: constitution, tiers, roadmap, glossary)
+  01-WEB-SECURITY.md       adversary matrix, C-ladder, trusted chrome, must-never list
+  02-WEB-NAMING.md         b3/ed/@petname/name~keytag/bare/delegation/dns ramp
+  03-WEB-BUNDLE.md         bundle format, chunks, manifests, lifecycle, cache, GC, compiled
+  04-WEB-RPC.md            service identity, interface schema, wire, RPC events, canonical ifaces
+  05-WEB-PERMISSIONS.md    capability vocab, wasmtime gates, task manager, safe mode
+  06-WEB-UPDATES.md        U-ladder diff, rollback, key rotation, storage migration
+  07-WEB-SWARM.md          gateways, LAN, DHT, Wirehair, relays, privacy modes
+  08-WEB-VALUE.md          WVEP (WRITTEN) — offers, sessions, receipts, V-ladder, threat model
+  09-WEB-MIGRATION.md      extension/native split, dns legacy surface, shim, onboarding
+  10-WEB-UX.md             identity chrome, first-contact ceremony, prompts, value UI
+  11-WEB-PACKAGES.md       deps as ed:/b3: refs (§17.2)
+  12-WEB-DATA.md           D-ladder durability model + export ABI (§18)
+  GLOSSARY.md   SCHEMAS/ (CDDL)   TEST-VECTORS/   THREAT-MODELS/   EXAMPLES/
+```
+
+**Canonical schemas** (deterministic CBOR + CDDL, in `SCHEMAS/`): BundleManifest,
+PublisherManifest, ServiceManifest, InterfaceSchema, CapabilityManifest,
+NameClaim, DelegationRecord, DefaultsManifest, ValueOffer, ValueReceipt,
+RecoveryRecord, UpdateDiff. Once these exist, drift stops and implementation
+becomes concrete. (Field-level shapes indexed in §15; normative CDDL is P0.)
