@@ -142,12 +142,15 @@ impl GwbDocument {
         }
     }
 
-    /// Attach a started GWB guest: apply its initial batches immediately.
-    pub fn attach_guest(&mut self, rt: crate::abi::GuestRuntime) {
+    /// Attach a started GWB guest: apply its initial batches immediately,
+    /// then deliver the one-shot PAGE_LOAD event (guests subscribe on the
+    /// mount root during gwb_start; unsubscribed guests never see it).
+    pub fn attach_guest(&mut self, rt: crate::abi::GuestRuntime, w: f32, h: f32, scale: f32) {
         self.guest = Some(rt);
         let applied = self.apply_guest_batches();
         crate::logger::log("abi", &format!("initial mount: {applied} ops applied"));
         self.dirty = true;
+        self.notify_window_event(crate::abi::EventOut::page_load(w, h, scale));
     }
 
     /// Apply everything the guest submitted; if a Focus op landed on a text
@@ -251,11 +254,16 @@ impl GwbDocument {
             driver.handle_dom_event(event);
         }
         // The pointer-down default (focus-on-click) didn't run; emulate it so
-        // `click #input` + `type ...` composes naturally (caret at end).
+        // `click #input` + `type ...` composes naturally (caret at end). The
+        // synthetic Focus event keeps guest onFocus handlers honest too.
         if is_input {
             if let Some(nid) = self.resolve(selector) {
                 self.doc.set_focus_to(nid);
                 self.caret_to_end(nid);
+                self.script_dispatch(
+                    nid,
+                    blitz_traits::events::DomEventData::Focus(blitz_traits::events::BlitzFocusEvent),
+                );
             }
         }
         true
@@ -269,6 +277,105 @@ impl GwbDocument {
     pub fn script_focus(&mut self, selector: &str) -> bool {
         let Some(nid) = self.resolve(selector) else { return false };
         self.doc.set_focus_to(nid);
+        self.script_dispatch(
+            nid,
+            blitz_traits::events::DomEventData::Focus(blitz_traits::events::BlitzFocusEvent),
+        );
+        true
+    }
+
+    /// Dispatch one synthetic DomEvent at a node through the guest event
+    /// pipeline (shared by hover/unhover/rclick/wheel below).
+    fn script_dispatch(&mut self, nid: usize, data: blitz_traits::events::DomEventData) {
+        let event = DomEvent::new(nid, data);
+        if self.guest.is_some() {
+            {
+                let rt = self.guest.as_mut().unwrap();
+                let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
+                let mut driver = EventDriver::new(&mut self.doc, handler);
+                driver.handle_dom_event(event);
+            }
+            self.apply_guest_batches();
+            self.dirty = true;
+            self.check_observations();
+        } else {
+            let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
+            driver.handle_dom_event(event);
+        }
+    }
+
+    /// Pointer-family synthesis: borrow the click event's coords/buttons and
+    /// rewrap as the requested variant. Same non-hit-tested contract as
+    /// script_click.
+    fn script_pointer(
+        &mut self,
+        selector: &str,
+        wrap: fn(blitz_traits::events::BlitzPointerEvent) -> blitz_traits::events::DomEventData,
+    ) -> bool {
+        use blitz_traits::events::DomEventData as D;
+        let Some(nid) = self.resolve(selector) else { return false };
+        let Some(node) = self.doc.get_node(nid) else { return false };
+        let D::Click(pe) = node.synthetic_click_event(Modifiers::empty()) else { return false };
+        self.script_dispatch(nid, wrap(pe));
+        true
+    }
+
+    pub fn script_hover(&mut self, selector: &str) -> bool {
+        self.script_pointer(selector, blitz_traits::events::DomEventData::PointerEnter)
+    }
+
+    pub fn script_unhover(&mut self, selector: &str) -> bool {
+        self.script_pointer(selector, blitz_traits::events::DomEventData::PointerLeave)
+    }
+
+    pub fn script_rclick(&mut self, selector: &str) -> bool {
+        self.script_pointer(selector, blitz_traits::events::DomEventData::ContextMenu)
+    }
+
+    pub fn script_wheel(&mut self, selector: &str, dy: f64) -> bool {
+        use blitz_traits::events::{
+            BlitzWheelDelta, BlitzWheelEvent, DomEventData as D, MouseEventButtons, PointerCoords,
+        };
+        let Some(nid) = self.resolve(selector) else { return false };
+        let ev = BlitzWheelEvent {
+            delta: BlitzWheelDelta::Pixels(0.0, dy),
+            coords: PointerCoords {
+                page_x: 0.0,
+                page_y: 0.0,
+                screen_x: 0.0,
+                screen_y: 0.0,
+                client_x: 0.0,
+                client_y: 0.0,
+            },
+            buttons: MouseEventButtons::empty(),
+            mods: Modifiers::empty(),
+        };
+        self.script_dispatch(nid, D::Wheel(ev));
+        true
+    }
+
+    /// Press a named key through the real keyboard pipeline (goes to the
+    /// focused element, exactly like a physical key).
+    pub fn script_key(&mut self, name: &str) -> bool {
+        let (key, code) = match name {
+            "Enter" => (Key::Enter, Code::Enter),
+            "Escape" => (Key::Escape, Code::Escape),
+            "Tab" => (Key::Tab, Code::Tab),
+            "End" => (Key::End, Code::End),
+            "Home" => (Key::Home, Code::Home),
+            _ => return false,
+        };
+        let k = BlitzKeyEvent {
+            key,
+            code,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: None,
+        };
+        self.handle_ui_event(UiEvent::KeyDown(k));
         true
     }
 
@@ -638,6 +745,26 @@ impl GwbApplication {
             C::Focus(sel) => {
                 let ok = doc.script_focus(sel);
                 crate::logger::log("script", &format!("focus {sel}: {}", if ok { "ok" } else { "NO MATCH" }));
+            }
+            C::Hover(sel) => {
+                let ok = doc.script_hover(sel);
+                crate::logger::log("script", &format!("hover {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
+            }
+            C::Unhover(sel) => {
+                let ok = doc.script_unhover(sel);
+                crate::logger::log("script", &format!("unhover {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
+            }
+            C::RClick(sel) => {
+                let ok = doc.script_rclick(sel);
+                crate::logger::log("script", &format!("rclick {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
+            }
+            C::Key(name) => {
+                let ok = doc.script_key(name);
+                crate::logger::log("script", &format!("key {name}: {}", if ok { "sent" } else { "UNKNOWN KEY" }));
+            }
+            C::Wheel(sel, dy) => {
+                let ok = doc.script_wheel(sel, *dy);
+                crate::logger::log("script", &format!("wheel {sel} {dy}: {}", if ok { "hit" } else { "NO MATCH" }));
             }
             C::Dump(path) => match doc.dump_dom(path) {
                 Ok(()) => crate::logger::log("script", &format!("dumped DOM to {path}")),

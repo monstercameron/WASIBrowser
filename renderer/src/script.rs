@@ -9,6 +9,11 @@
 //!   click <selector>        e.g. click #increment
 //!   type <text...>          IME-commit into the focused element
 //!   focus <selector>
+//!   hover <selector>        synthetic PointerEnter at the element
+//!   unhover <selector>      synthetic PointerLeave
+//!   rclick <selector>       synthetic ContextMenu
+//!   key <name>              KeyDown to the focused element (Enter/Escape/Tab/End/Home)
+//!   wheel <selector> <dy>   Wheel at the element (negative dy = scroll up)
 //!   dump <path>             write the mount subtree as indented pseudo-HTML
 //!   quit
 
@@ -21,6 +26,11 @@ pub enum ScriptCmd {
     Click(String),
     Type(String),
     Focus(String),
+    Hover(String),
+    Unhover(String),
+    RClick(String),
+    Key(String),
+    Wheel(String, f64),
     Dump(String),
     Quit,
 }
@@ -59,6 +69,14 @@ pub fn run(path: String, proxy: BlitzShellProxy) {
                     "click" => ScriptCmd::Click(rest),
                     "type" => ScriptCmd::Type(rest),
                     "focus" => ScriptCmd::Focus(rest),
+                    "hover" => ScriptCmd::Hover(rest),
+                    "unhover" => ScriptCmd::Unhover(rest),
+                    "rclick" => ScriptCmd::RClick(rest),
+                    "key" => ScriptCmd::Key(rest),
+                    "wheel" => {
+                        let (sel, dy) = rest.rsplit_once(char::is_whitespace).unwrap_or((rest.as_str(), "-120"));
+                        ScriptCmd::Wheel(sel.trim().to_string(), dy.trim().parse().unwrap_or(-120.0))
+                    }
                     "dump" => ScriptCmd::Dump(rest),
                     "quit" => ScriptCmd::Quit,
                     other => {

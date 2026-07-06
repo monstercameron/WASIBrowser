@@ -41,6 +41,9 @@ pub mod ev {
     pub const THEME_CHANGE: u16 = 19;
     pub const CONTEXT_MENU: u16 = 20;
     pub const POINTER_CANCEL: u16 = 21;
+    /// Delivered once to the mount root after the initial batches are applied
+    /// (the "document loaded" moment). Payload = {w f32, h f32, scale f32}.
+    pub const PAGE_LOAD: u16 = 22;
     pub const OBSERVED_LAYOUT: u16 = 32;
     pub const OBSERVED_VISIBILITY: u16 = 33;
 }
@@ -682,6 +685,13 @@ impl EventOut {
         EventOut::new(ev::THEME_CHANGE).u32_at(0, dark as u32)
     }
 
+    pub fn page_load(w: f32, h: f32, scale: f32) -> Self {
+        EventOut::new(ev::PAGE_LOAD)
+            .f32_at(0, w)
+            .f32_at(4, h)
+            .f32_at(8, scale)
+    }
+
     pub fn net_result(status: u16, ok: bool, body: String) -> Self {
         EventOut::new(ev::NET_RESULT)
             .u16_at(0, status)
@@ -712,6 +722,7 @@ pub fn map_dom_event(data: &blitz_traits::events::DomEventData) -> Option<EventO
         D::Click(p) => pointer(ev::CLICK, p),
         D::DoubleClick(p) => pointer(ev::DBLCLICK, p),
         D::ContextMenu(p) => pointer(ev::CONTEXT_MENU, p),
+        D::PointerCancel(p) => pointer(ev::POINTER_CANCEL, p),
         D::Wheel(w) => {
             use blitz_traits::events::BlitzWheelDelta;
             let (dx, dy) = match w.delta {

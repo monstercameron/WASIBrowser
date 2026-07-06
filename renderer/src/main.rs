@@ -61,7 +61,7 @@ fn main() -> Result<()> {
         Ok(Some(mut rt)) => {
             rt.start(1100.0, 800.0, 1.0, 1)
                 .context("gwb_start failed")?;
-            doc.attach_guest(rt);
+            doc.attach_guest(rt, 1100.0, 800.0, 1.0);
         }
         Ok(None) => legacy = true,
         Err(e) => {

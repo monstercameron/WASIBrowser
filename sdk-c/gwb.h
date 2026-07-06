@@ -39,6 +39,10 @@ enum {
     GWB_EV_KEY_UP = 10, GWB_EV_TEXT_INPUT = 11, GWB_EV_INPUT = 12,
     GWB_EV_FOCUS = 15, GWB_EV_BLUR = 16, GWB_EV_SCROLL = 17,
     GWB_EV_WINDOW_RESIZE = 18, GWB_EV_THEME_CHANGE = 19,
+    GWB_EV_CONTEXT_MENU = 20, GWB_EV_POINTER_CANCEL = 21,
+    /* delivered once to the mount root after the initial batches apply;
+     * payload = {w f32, h f32, scale f32} (same layout as WINDOW_RESIZE) */
+    GWB_EV_PAGE_LOAD = 22,
     GWB_EV_OBSERVED_LAYOUT = 32,
     /* async completions: target = request id, payload = {status u16, ok u8},
      * trailing str = response body (truncated to the event region) */
@@ -198,6 +202,7 @@ static u32 gwb_decode_events(u32 count, gwb_event_fn handler) {
         case GWB_EV_POINTER_DOWN: case GWB_EV_POINTER_UP: case GWB_EV_POINTER_MOVE:
         case GWB_EV_CLICK: case GWB_EV_DBLCLICK:
         case GWB_EV_POINTER_ENTER: case GWB_EV_POINTER_LEAVE:
+        case GWB_EV_CONTEXT_MENU: case GWB_EV_POINTER_CANCEL:
             e.x = gwb_getf32(r + 20); e.y = gwb_getf32(r + 24);
             e.buttons = gwb_get16(r + 28); e.mods = gwb_get16(r + 30);
             break;
@@ -211,7 +216,7 @@ static u32 gwb_decode_events(u32 count, gwb_event_fn handler) {
         case GWB_EV_SCROLL:
             e.x = gwb_getf32(r + 20); e.y = gwb_getf32(r + 24);
             break;
-        case GWB_EV_WINDOW_RESIZE:
+        case GWB_EV_WINDOW_RESIZE: case GWB_EV_PAGE_LOAD:
             e.w = gwb_getf32(r + 20); e.h = gwb_getf32(r + 24);
             e.scale = gwb_getf32(r + 28);
             break;

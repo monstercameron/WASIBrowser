@@ -17,4 +17,20 @@ click #task-title
 type "AB"
 type "CD"
 dump logs/dash-5-keyed-typing.txt
+# interaction events: hover highlight, Enter-to-add, priority wheel, rclick
+# (filter is on Done after the clicks above; cycle back to All to see rows)
+click #cycle-filter
+hover #task-row-2
+dump logs/dash-6-hover.txt
+unhover #task-row-2
+dump logs/dash-7-unhover.txt
+# the filter click above stole focus; refocus, then Enter submits the draft
+focus #task-title
+key Enter
+dump logs/dash-8-enter-add.txt
+wheel #priority-output -120
+wheel #priority-output -120
+dump logs/dash-9-wheel.txt
+rclick #task-row-3
+dump logs/dash-10-rclick.txt
 quit

@@ -175,9 +175,14 @@ payload [16 bytes, kind-specific] | str_len u32 (0 if none) | str bytes, pad 4
   `{dx f32, dy f32, mods u16}` · key `{code u16, mods u16, state u8}` · text-input /
   input / change: new value in trailing string · resize `{w f32, h f32, scale f32}` ·
   theme `{dark u32}`.
-- v1 kinds: `pointer_down/up/move`, `click`, `dblclick`, `pointer_enter/leave`,
-  `wheel`, `key_down/up`, `text_input`, `input`, `change`, `submit`, `focus`, `blur`,
-  `scroll`, `window_resize`, `theme_change` + synthetic observation kinds (below).
+- v1 kinds: `pointer_down/up/move/cancel`, `click`, `dblclick`, `context_menu`,
+  `pointer_enter/leave`, `wheel`, `key_down/up`, `text_input`, `input`, `change`,
+  `submit`, `focus`, `blur`, `scroll`, `window_resize`, `theme_change`,
+  `page_load` + synthetic observation kinds (below).
+- `page_load` (kind 22) is delivered ONCE to the mount root right after the
+  initial batches apply — the "document loaded" moment. Payload =
+  `{w f32, h f32, scale f32}` (same layout as `window_resize`). Guests that
+  don't subscribe during `gwb_start` never see it.
 
 **Delivery timing** (see Latency contract): discrete events immediately, one
 `gwb_events` call per OS event; continuous streams coalesced per frame into one

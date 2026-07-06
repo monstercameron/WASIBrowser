@@ -173,7 +173,11 @@ typedef struct {
     const char *draftTitle;
     i32 priority;
     Handler onTitleInput;
+    Handler onTitleKey;   /* Enter submits */
+    Handler onTitleFocus;
+    Handler onTitleBlur;
     Handler onPriorityCycle;
+    Handler onPriorityWheel; /* wheel over the readout adjusts 1..3 */
     Handler onSubmit;
 } TaskComposerProps;
 
@@ -196,6 +200,9 @@ component(TaskComposer, props, TaskComposerProps) {
                             type("text"),
                             value(props.draftTitle),
                             onInput(props.onTitleInput),
+                            onKeyDown(props.onTitleKey),
+                            onFocus(props.onTitleFocus),
+                            onBlur(props.onTitleBlur),
                             placeholder("What needs doing?"),
                             class(U(WFull, RoundedXl, BorderSlate300, BgWhite,
                                     Px(4), Py(3), TextSm))
@@ -211,7 +218,10 @@ component(TaskComposer, props, TaskComposerProps) {
                 ),
                 div(
                     class(U(Flex, Gap(2), ItemsCenter)),
-                    output(class(U(TextSm, FgSlate600)),
+                    output(
+                        id("priority-output"),
+                        onWheel(props.onPriorityWheel),
+                        class(U(TextSm, FgSlate600, TwSelectNone)),
                         text("Priority: %d", props.priority)),
                     AppButton(Props(AppButtonProps,
                         .label = "Cycle priority",
@@ -264,8 +274,12 @@ component(Toolbar, props, ToolbarProps) {
 
 typedef struct {
     const Task *task; /* points into the persistent store: outlives the render */
+    i32 isHovered;
     Handler onToggle;
     Handler onRemove;
+    Handler onHoverEnter;
+    Handler onHoverLeave;
+    Handler onContext;
 } TaskRowProps;
 
 component(TaskRow, props, TaskRowProps) {
@@ -273,8 +287,13 @@ component(TaskRow, props, TaskRowProps) {
     const Task *task = props.task;
 
     return li(
+        id(strf("task-row-%d", task->id)),
+        onHover(props.onHoverEnter, props.onHoverLeave),
+        onDblClick(props.onToggle),      /* double-click anywhere toggles */
+        onContextMenu(props.onContext),  /* right-click marks (Prevent'd) */
         class(U(Flex, ItemsCenter, JustifyBetween, Gap(3), RoundedXl,
-                BorderSlate200, BgWhite, Px(4), Py(3))),
+                BorderSlate200, BgWhite, Px(4), Py(3), TwTransition)),
+        classIf(props.isHovered, twBg(TwSlate, 50), twBorderColor(TwSlate, 300)),
         classIf(task->done, Opacity60),
         div(
             class(U(Flex, FlexCol, Gap(1))),
@@ -309,8 +328,12 @@ component(TaskRow, props, TaskRowProps) {
 typedef struct {
     const TaskStore *store; /* immutable-ish input state */
     TaskFilter filter;      /* view state */
+    i32 hoveredTaskId;
     Handler onToggleTask;   /* behavior */
     Handler onRemoveTask;
+    Handler onHoverTask;
+    Handler onUnhoverTask;
+    Handler onContextTask;
 } TaskListProps;
 
 component(TaskList, props, TaskListProps) {
@@ -331,8 +354,12 @@ component(TaskList, props, TaskListProps) {
                         Task_MatchesFilter(task, props.filter),
                         TaskRow(Props(TaskRowProps,
                             .task = task,
+                            .isHovered = props.hoveredTaskId == task->id,
                             .onToggle = bindI32(props.onToggleTask, task->id),
                             .onRemove = bindI32(props.onRemoveTask, task->id),
+                            .onHoverEnter = bindI32(props.onHoverTask, task->id),
+                            .onHoverLeave = props.onUnhoverTask,
+                            .onContext = bindI32(props.onContextTask, task->id),
                         ))))
             )
         ),
@@ -416,6 +443,9 @@ component0(RemoteTodos) {
 typedef struct {
     i32 renderCount;
     i32 lastChangedTaskId;
+    i32 hoveredTaskId;
+    i32 editingDraft;
+    i32 vpW, vpH;
     TaskFilter previousFilter;
     TaskFilter currentFilter;
 } DebugPanelProps;
@@ -432,6 +462,10 @@ component(DebugPanel, props, DebugPanelProps) {
                 dt("Render count"), dd(Text(props.renderCount)),
                 dt("Interactions"), dd(Text(interactions)),
                 dt("Last changed task id"), dd(Text(props.lastChangedTaskId)),
+                dt("Hovered task id"), dd(Text(props.hoveredTaskId)),
+                dt("Editing draft"),
+                dd(IfElse(props.editingDraft, Text("yes"), Text("no"))),
+                dt("Viewport"), dd(text("%dx%d", props.vpW, props.vpH)),
                 dt("Filter change"),
                 dd(text("%s -> %s",
                     Filter_Label(props.previousFilter),
@@ -474,6 +508,10 @@ component(DashboardApp, props, DashboardAppProps) {
     stateI32(draftPriority, 2);
     stateEnum(TaskFilter, filter, FilterAll);
     stateI32(lastChangedTaskId, 0);
+    stateI32(hoveredTaskId, 0);
+    stateBool(editingDraft, 0);
+    stateI32(vpW, 0);
+    stateI32(vpH, 0);
     previousI32(previousFilter, filter);
 
     /* Derived business data (recomputed each render; events ran already). */
@@ -489,6 +527,56 @@ component(DashboardApp, props, DashboardAppProps) {
     eventInput(updateDraftTitle, e) {
         logf("[dashboard] draft title -> \"%s\"", e.value);
         set(draftTitle, e.value);
+    }
+
+    /* ---- browser interaction events beyond click/input ---- */
+
+    eventResize(pageLoaded, v) { /* onLoad: fires once after initial mount */
+        logf("[dashboard] page load: %dx%d", (i32)v.w, (i32)v.h);
+        set(vpW, (i32)v.w);
+        set(vpH, (i32)v.h);
+    }
+
+    eventResize(viewportResized, v) {
+        logf("[dashboard] window resize: %dx%d", (i32)v.w, (i32)v.h);
+        set(vpW, (i32)v.w);
+        set(vpH, (i32)v.h);
+    }
+
+    eventKey(draftKey, k) { /* Enter in the title input submits */
+        if (strEq(k.key, "Enter") && draftTitle[0]) {
+            setAtom(interactionCount, useAtom(interactionCount) + 1);
+            if (TaskStore_Add(store, draftTitle, draftPriority)) {
+                logf("[dashboard] added task #%d \"%s\" via Enter",
+                    store->nextId - 1, draftTitle);
+                set(draftTitle, "");
+                set(draftPriority, 2);
+            }
+        }
+    }
+
+    event(draftFocused) { logf("[dashboard] draft input focused"); set(editingDraft, 1); }
+    event(draftBlurred) { logf("[dashboard] draft input blurred"); set(editingDraft, 0); }
+
+    eventWheel(priorityWheel, w) { /* wheel over the priority readout */
+        i32 next = w.dy < 0
+            ? (draftPriority >= 3 ? 3 : draftPriority + 1)
+            : (draftPriority <= 1 ? 1 : draftPriority - 1);
+        if (next != draftPriority) {
+            logf("[dashboard] priority wheel %s -> %d", w.dy < 0 ? "up" : "down", next);
+            set(draftPriority, next);
+        }
+    }
+
+    eventI32(hoverTask, taskId) {
+        logf("[dashboard] hover task #%d", taskId);
+        set(hoveredTaskId, taskId);
+    }
+    event(unhoverTask) { set(hoveredTaskId, 0); }
+
+    eventI32(contextTask, taskId) { /* right-click; default menu suppressed */
+        logf("[dashboard] context menu on task #%d (default suppressed)", taskId);
+        set(lastChangedTaskId, taskId);
     }
 
     event(cyclePriority) {
@@ -560,13 +648,21 @@ component(DashboardApp, props, DashboardAppProps) {
             .subtitle = "State, context, prop drilling, payload handlers, "
                         "keyed lists, and imported business logic - in C.",
             .children = Children(
+                /* window-level hooks: root-subscribed regardless of position */
+                onLoad(pageLoaded),
+                onWindowResize(viewportResized),
+
                 StatsGrid(Props(StatsGridProps, .stats = stats)),
 
                 TaskComposer(Props(TaskComposerProps,
                     .draftTitle = draftTitle,
                     .priority = draftPriority,
                     .onTitleInput = updateDraftTitle,
+                    .onTitleKey = draftKey,
+                    .onTitleFocus = draftFocused,
+                    .onTitleBlur = draftBlurred,
                     .onPriorityCycle = cyclePriority,
+                    .onPriorityWheel = Prevent(priorityWheel),
                     .onSubmit = addTask,
                 )),
 
@@ -580,8 +676,12 @@ component(DashboardApp, props, DashboardAppProps) {
                 TaskList(Props(TaskListProps,
                     .store = store,
                     .filter = filter,
+                    .hoveredTaskId = hoveredTaskId,
                     .onToggleTask = toggleTask,
                     .onRemoveTask = removeTask,
+                    .onHoverTask = hoverTask,
+                    .onUnhoverTask = unhoverTask,
+                    .onContextTask = Prevent(contextTask),
                 )),
 
                 Show(stats.highPriorityOpen > 0,
@@ -596,6 +696,10 @@ component(DashboardApp, props, DashboardAppProps) {
                 DebugPanel(Props(DebugPanelProps,
                     .renderCount = renderCount(),
                     .lastChangedTaskId = lastChangedTaskId,
+                    .hoveredTaskId = hoveredTaskId,
+                    .editingDraft = editingDraft,
+                    .vpW = vpW,
+                    .vpH = vpH,
                     .previousFilter = previousFilter.ok
                         ? (TaskFilter)previousFilter.value
                         : filter,

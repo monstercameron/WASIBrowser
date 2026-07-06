@@ -33,6 +33,10 @@
  * boundaries: not yet (traps are the error story).
  *   stateI32/stateBool/stateStr, set(name, v), previousI32           hooks
  *   event(name){...} / eventInput(name, e){...}, onClick/onInput     handlers
+ *   eventKey/eventPointer/eventWheel/eventResize(name, e){...}       payloads
+ *   onDblClick/onContextMenu/onKeyDown/onKeyUp/onFocus/onBlur/
+ *   onPointer*(+ onMouseEnter/Leave, onHover pair)/onWheel/onScroll  events
+ *   onLoad/onWindowResize/onThemeChange       window-level (root-subscribed)
  *   id("...") type/value/placeholder(...)   attributes
  *
  * Rules of thumb: inside the returned tree use If/Show/Range/map; outside it,
@@ -387,6 +391,14 @@ static const char *gwbc_input_value(Handler h) {
 static Node gc_on(Handler h, u16 kind) {
     Node n = gc_alloc(K_HANDLER);
     gc_nodes[n.idx].a = h; gc_nodes[n.idx].ev = kind;
+    return n;
+}
+
+/* Window-level hook: listens on the mount root (guest id 1) no matter which
+ * element the node sits in — the host targets root for load/resize/theme. */
+static Node gc_on_root(Handler h, u16 kind) {
+    Node n = gc_on(h, kind);
+    gc_nodes[n.idx].variant = 1;
     return n;
 }
 
@@ -811,14 +823,19 @@ static void gc_apply(i32 idx, u32 elem, char *classbuf, u32 *classlen) {
     }
     case K_STYLE: gwb_set_style(elem, n->a, n->s); break;
     case K_ATTR: gwb_set_attr(elem, n->a, n->s); break;
-    case K_HANDLER:
-        gwb_listen(elem, n->ev);
+    case K_HANDLER: {
+        /* variant 1 = window-level hook (onLoad/onWindowResize/onThemeChange):
+         * the host delivers those to the mount root, not the element the node
+         * happens to sit in. */
+        u32 target = n->variant ? GWB_ROOT : elem;
+        gwb_listen(target, n->ev);
         if (gc_hn_count >= 256) gwbc_panic("gwbc: handler-node map full (256)");
-        gc_hn_node[gc_hn_count] = elem;
+        gc_hn_node[gc_hn_count] = target;
         gc_hn_handler[gc_hn_count] = n->a;
         gc_hn_kind[gc_hn_count] = n->ev;
         gc_hn_count++;
         break;
+    }
     case K_GROUP:
         for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_apply(c, elem, classbuf, classlen);
         break;
@@ -984,6 +1001,11 @@ static void gwbc_render(void) {
     gwb_flush();
 }
 
+/* Full record of the event being handled — the typed payload views
+ * (eventPointer/eventKey/eventWheel/eventResize) read from here. Valid only
+ * while the handler's settle pass runs. */
+static gwb_event gc_event_info;
+
 static u32 gc_on_event(const gwb_event *e) {
     if (e->kind == GWB_EV_NET_RESULT) {
         gc_query_complete(e);
@@ -999,6 +1021,7 @@ static u32 gc_on_event(const gwb_event *e) {
             gc_active_handler = base;
             gc_event_payload = payload;
             gc_event_value = e->str;
+            gc_event_info = *e;
             gwbc_render();
             return gc_handler_ret[base]; /* Prevent/Stop flags */
         }
@@ -1310,6 +1333,44 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
     if (gwbc_handler_active(name)) \
         for (i32 arg = gc_event_payload, gc__go = 1; gc__go; gc__go = 0)
 
+/* -- typed event payload views --
+ * Scoped structs over the delivering event's record; use with the matching
+ * on* attachment. All fields are copies except KeyEvent.key (valid for the
+ * handler body only).
+ *   eventKey(draftKey, k) { if (strEq(k.key, "Enter")) ...; }   onKeyDown
+ *   eventPointer(rowEnter, pt) { ... pt.x, pt.y ... }           pointer family
+ *   eventWheel(spin, w) { if (w.dy < 0) ...; }                  onWheel
+ *   eventResize(loaded, v) { ... v.w, v.h, v.scale ... }        onLoad/onWindowResize */
+typedef struct { f32 x, y; i32 buttons, mods; } PointerEvent;
+typedef struct { const char *key; i32 mods, pressed; } KeyEvent;
+typedef struct { f32 dx, dy; i32 mods; } WheelEvent;
+typedef struct { f32 w, h, scale; } ResizeEvent;
+
+#define eventPointer(name, e) \
+    Handler name = gwbc_handler(#name); \
+    if (gwbc_handler_active(name)) \
+        for (PointerEvent e = { gc_event_info.x, gc_event_info.y, \
+                gc_event_info.buttons, gc_event_info.mods }, \
+             *gc__p = &e; gc__p; gc__p = 0)
+#define eventKey(name, e) \
+    Handler name = gwbc_handler(#name); \
+    if (gwbc_handler_active(name)) \
+        for (KeyEvent e = { gc_event_value, gc_event_info.mods, \
+                gc_event_info.pressed }, \
+             *gc__p = &e; gc__p; gc__p = 0)
+#define eventWheel(name, e) \
+    Handler name = gwbc_handler(#name); \
+    if (gwbc_handler_active(name)) \
+        for (WheelEvent e = { gc_event_info.dx, gc_event_info.dy, \
+                gc_event_info.mods }, \
+             *gc__p = &e; gc__p; gc__p = 0)
+#define eventResize(name, e) \
+    Handler name = gwbc_handler(#name); \
+    if (gwbc_handler_active(name)) \
+        for (ResizeEvent e = { gc_event_info.w, gc_event_info.h, \
+                gc_event_info.scale }, \
+             *gc__p = &e; gc__p; gc__p = 0)
+
 /* -- context (immediate-mode: a value stack scoped by provider()) --
  * context(ThemeContext, ThemeValue);            file scope
  * provider(ThemeContext, theme, ...children)    in-tree (statement expr:
@@ -1361,8 +1422,35 @@ static Node gwbc_text_i32(i32 v) {
 #define type(v) gc_attr(GWB_ATTR_TYPE, v)
 #define value(v) gc_attr(GWB_ATTR_VALUE, v)
 #define placeholder(v) gc_attr(GWB_ATTR_PLACEHOLDER, v)
+/* The full browser interaction-event surface. Every kind the ABI forwards
+ * has an on* attachment; payloads via the typed event views
+ * (eventPointer/eventKey/eventWheel/eventResize) or eventInput for value. */
 #define onClick(h) gc_on((h), GWB_EV_CLICK)
+#define onDblClick(h) gc_on((h), GWB_EV_DBLCLICK)
+#define onContextMenu(h) gc_on((h), GWB_EV_CONTEXT_MENU)
 #define onInput(h) gc_on((h), GWB_EV_INPUT)
+#define onTextInput(h) gc_on((h), GWB_EV_TEXT_INPUT)
+#define onKeyDown(h) gc_on((h), GWB_EV_KEY_DOWN)
+#define onKeyUp(h) gc_on((h), GWB_EV_KEY_UP)
+#define onFocus(h) gc_on((h), GWB_EV_FOCUS)
+#define onBlur(h) gc_on((h), GWB_EV_BLUR)
+#define onPointerDown(h) gc_on((h), GWB_EV_POINTER_DOWN)
+#define onPointerUp(h) gc_on((h), GWB_EV_POINTER_UP)
+#define onPointerMove(h) gc_on((h), GWB_EV_POINTER_MOVE)
+#define onPointerEnter(h) gc_on((h), GWB_EV_POINTER_ENTER)
+#define onPointerLeave(h) gc_on((h), GWB_EV_POINTER_LEAVE)
+#define onPointerCancel(h) gc_on((h), GWB_EV_POINTER_CANCEL)
+/* React-familiar aliases + a paired hover convenience */
+#define onMouseEnter(h) onPointerEnter(h)
+#define onMouseLeave(h) onPointerLeave(h)
+#define onHover(enterH, leaveH) gc_group2(onPointerEnter(enterH), onPointerLeave(leaveH))
+#define onWheel(h) gc_on((h), GWB_EV_WHEEL)
+#define onScroll(h) gc_on((h), GWB_EV_SCROLL)
+/* Window-level hooks — attach anywhere in the tree; they subscribe the mount
+ * root. onLoad fires ONCE, right after the initial tree is applied. */
+#define onLoad(h) gc_on_root((h), GWB_EV_PAGE_LOAD)
+#define onWindowResize(h) gc_on_root((h), GWB_EV_WINDOW_RESIZE)
+#define onThemeChange(h) gc_on_root((h), GWB_EV_THEME_CHANGE)
 /* Presence attribute: disabled(cond) emits disabled="" only when true.
  * Blitz honors it natively (disabled elements don't hit-test as clicks). */
 #define disabled(cond) ((cond) ? gc_attr(GWB_ATTR_DISABLED, "") : (Node){ 0 })
