@@ -49,9 +49,50 @@ path      :=  route WITHIN the app (the app owns it; never a server path)
   name (mitigations in §7).
 - **`name.tld` — the ramp.** Resolved via DNS TXT / `.well-known` to an
   `ed:` or `b3:` authority, so existing names onboard without asking anyone.
-  The human-name layer is deliberately pluggable (DNS today; petname sets /
-  community registries later) because *that* is the one problem hashes don't
-  solve, and pretending otherwise is how you end up re-inventing ICANN.
+  The endgame human-name layer is §1b.
+
+## 1b. Human names without registrars
+
+Key scarcity is solved (2^252 Ed25519 keys — "domain capacity" is unlimited
+at the identity layer). The remaining scarce thing is *short memorable
+strings*, and every prior system monetized that scarcity (registrars) or
+tokenized it (Handshake/ENS — no). The next.0 answer: **free,
+first-come-first-served claims on federated transparency logs**, with the
+squat economy killed structurally instead of priced out:
+
+```
+claim   := { name, owner: ed25519 pubkey, expiry, sig }   -- FREE to file
+log     := append-only, merkle-audited (CT-style); N independent operators
+           cross-sign each other's heads; anyone can mirror/audit a log;
+           clients require a claim to be present in a QUORUM of logs
+FCFS    := earliest quorum-logged claim wins; logs are auditable, so a log
+           that back-dates or censors is provably cheating and gets dropped
+           from client quorum sets (operators are replaceable, not trusted)
+```
+
+Anti-squat without money — four structural deterrents:
+
+1. **Non-transferable.** A name is bound to its key forever; there is no
+   transfer record type. You cannot sell what cannot move — squatting has
+   no exit value. (Succession = the §7 M-of-N recovery path, which names
+   humans, not buyers.)
+2. **Liveness renewal.** Claims expire (say, yearly) and renew with one
+   free signature. Abandoned names recycle naturally; mass-squatting means
+   mass key custody + mass renewal forever, for inventory you can't sell.
+3. **Rate limits + proof-of-work per claim.** Filing costs nothing in money
+   and something in compute/patience; hoarding 10⁶ names is expensive in
+   the only currencies left.
+4. **No pressure on any single string**: apps are equally reachable by
+   `ed:` — a name is a convenience label, not existence. Losing the string
+   war doesn't unpublish anyone.
+
+Zooko's triangle honesty: this is *trust-minimized*, not trustless — global
+human names need SOME shared ordering, and a quorum of mutually-auditing,
+individually-disposable logs is the cheapest one that doesn't mint a token
+or a landlord. Below it, **petnames** remain first-class: the browser lets
+users/communities bind their own labels to `ed:` keys (imported sets, like
+a contacts book), which covers the "names I actually type" case with zero
+global coordination at all.
 
 **Identity hashing for users** (the other half of "identity"): there is no
 global user id. The browser holds a master keypair per profile; for each app
@@ -161,6 +202,32 @@ the same store:
    is untrusted infrastructure. This is the legacy ramp: day one, an app
    published to one $5 static host is fully functional; the swarm is an
    upgrade, not a requirement.
+
+**IPv6-first (the substrate).** next.0 assumes IPv6 and treats IPv4 as the
+compatibility case, because three of our goals fall out of v6 for free:
+
+- **Every node is addressable.** No NAT means no hole-punching rituals, no
+  relay dependence for the common case: any browser can seed, any laptop
+  can host a service — which is what bus-proofing actually requires.
+  (IPv4/CGNAT peers still work — via gateways and v6-capable relay peers —
+  they're just second-class seeders.)
+- **Identity-derived addresses.** Each `ed:` identity deterministically
+  derives an ORCHID-style IPv6 (RFC 7343: hash of the pubkey in
+  `2001:20::/28`) used as its stable *overlay* handle — uniform in logs,
+  ACLs, and socket-level APIs. Stated honestly: ORCHIDs are not globally
+  routable; real connectivity comes from signed endpoint records listing
+  concrete v6 addresses. The derived address is the wormhole-proof name of
+  the endpoint, not a routing miracle.
+- **Address abundance as an operational tool.** A service operator's /64
+  yields per-app, per-tenant, even per-session addresses — migration,
+  blue/green, and abuse isolation become address games instead of
+  load-balancer configs. Combined with key-verified handshakes (§4), an
+  endpoint can renumber freely: apps never see addresses, only keys.
+- **Multicast symbols.** IPv6 multicast + fountain codes are made for each
+  other: one sender, N receivers, zero per-receiver cost, and RaptorQ makes
+  loss per-receiver harmless (each just collects ε more symbols). LAN scope
+  first (classroom/office: one machine multicasts an app to thirty), wider
+  scopes where networks allow.
 
 **Fountain coding (the "raptor" in the brief).** Within a fetch, chunks are
 transmitted as RaptorQ (RFC 6330) symbols rather than requested piece by
@@ -294,10 +361,13 @@ docs/
 
 ## 7. Honest risks / open questions (critique targets)
 
-1. **Human names.** DNS-as-ramp is fine; the endgame (petnames? registries?
-   first-come squat-fest?) is unsolved everywhere. I propose shipping ramp
-   + raw hashes v1 and *not* inventing a naming coin. Push back if you want
-   a stronger stance.
+1. **Human names (§1b).** The federated-log FCFS design is trust-minimized,
+   not trustless: quorum sets of log operators are a governance surface
+   (who picks the default set shipped in the browser?). Also FCFS is still
+   FCFS — non-transferability kills the squat *market* but not spite-squats
+   or brand collisions; there is deliberately no dispute process (no UDRP,
+   no landlord). Is that the right trade, and who runs the first three
+   logs?
 2. **Key loss = name loss** for `ed:`. Mitigations: social-recovery
    successor records (signed by M-of-N recovery keys named at creation);
    still weaker than "call GoDaddy". Acceptable?
