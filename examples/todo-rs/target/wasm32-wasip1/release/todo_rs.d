@@ -1,1 +1,0 @@
-C:\Users\mreca\Desktop\GoWebBrowser\examples\todo-rs\target\wasm32-wasip1\release\todo_rs.wasm: C:\Users\mreca\Desktop\GoWebBrowser\examples\todo-rs\src\lib.rs C:\Users\mreca\Desktop\GoWebBrowser\sdk-rust\src\lib.rs
