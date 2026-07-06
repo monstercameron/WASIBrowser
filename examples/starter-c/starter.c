@@ -8,18 +8,18 @@
 
 typedef struct {
     const char *title;
-    i32 initial_count;
+    i32 initialCount;
 } StarterAppProps;
 
 typedef struct {
     const char *name;
     i32 count;
-    const char *previous_count;
-    Handler on_increment;
+    const char *previousCount;
+    Handler onIncrement;
 } CounterPanelProps;
 
 /* Boring C render function — the GWC-style answer to inline closures. */
-static Node render_dot(i32 i) {
+static Node renderDot(i32 i) {
     (void)i;
     return span(props(class(U(TextSm, FgAmber500))), "*");
 }
@@ -35,16 +35,16 @@ component(CounterPanel, props, CounterPanelProps) {
             text("Count: %d", props.count)),
 
         p(props(class(U(TextSm, FgSlate500))),
-            text("Previous count: %s", props.previous_count)),
+            text("Previous count: %s", props.previousCount)),
 
         div(props(class(U(Flex, Gap(1)))),
-            Range(min_i32(props.count, 20), render_dot)),
+            Range(minI32(props.count, 20), renderDot)),
 
         button(
             props(
                 id("increment"),
                 type("button"),
-                on_click(props.on_increment),
+                onClick(props.onIncrement),
                 class(U(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm,
                         Cursor("pointer"), Hover(BgSlate700)))
             ),
@@ -54,21 +54,21 @@ component(CounterPanel, props, CounterPanelProps) {
 }
 
 component(StarterApp, props, StarterAppProps) {
-    state_i32(count, props.initial_count);
-    state_str(name, "C developer");
-    previous_i32(previous_count, count);
+    stateI32(count, props.initialCount);
+    stateStr(name, "C developer");
+    previousI32(previousCount, count);
 
     event(increment) {
         set(count, count + 1);
     }
 
-    event_input(update_name, e) {
+    eventInput(updateName, e) {
         set(name, e.value);
     }
 
-    char previous_label[32] = "none yet";
-    if (previous_count.ok) {
-        fmt_i32(previous_label, previous_count.value);
+    char previousLabel[32] = "none yet";
+    if (previousCount.ok) {
+        fmtI32(previousLabel, previousCount.value);
     }
 
     return main(
@@ -90,7 +90,7 @@ component(StarterApp, props, StarterAppProps) {
                     id("name-input"),
                     type("text"),
                     value(name),
-                    on_input(update_name),
+                    onInput(updateName),
                     placeholder("Who is using the app?"),
                     class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
                 )
@@ -103,11 +103,11 @@ component(StarterApp, props, StarterAppProps) {
                 )
             ),
 
-            CounterPanel(P_(CounterPanelProps,
+            CounterPanel(Props(CounterPanelProps,
                 .name = name,
                 .count = count,
-                .previous_count = previous_label,
-                .on_increment = increment,
+                .previousCount = previousLabel,
+                .onIncrement = increment,
             )),
 
             p(
@@ -120,5 +120,5 @@ component(StarterApp, props, StarterAppProps) {
 
 app(StarterApp, {
     .title = "GWB Starter",
-    .initial_count = 0,
+    .initialCount = 0,
 });

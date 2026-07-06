@@ -15,14 +15,14 @@
  *
  * Layer 2 — ergonomic authoring aliases (lowercase; components PascalCase):
  *   component(Name, props, PropsType) { ... return view(...); }
- *   Comp(P_(CompProps, .field = v, ...))    direct component calls (no child())
+ *   Comp(Props(CompProps, .field = v))      direct component calls (no child())
  *   app(Root, { ... })                      exports
  *   div/p/h1/button/input/span/...          variadic tags; bare strings become text
  *   props(...) / class(...) / css(...)      grouping (pure splats, zero runtime)
  *   text("Count: %d", count)                reactive text (mini printf: %s %d %%)
- *   map_range(i, n, node) / map(it, arr, n, node) / map_keyed(...)   expr lists
- *   state_i32/state_bool/state_str, set(name, v), previous_i32       hooks
- *   event(name){...} / event_input(name, e){...}, on_click/on_input  handlers
+ *   mapRange(i, n, node) / map(it, arr, n, node) / mapKeyed(...)     expr lists
+ *   stateI32/stateBool/stateStr, set(name, v), previousI32           hooks
+ *   event(name){...} / eventInput(name, e){...}, onClick/onInput     handlers
  *   id("...") type/value/placeholder(...)   attributes
  *
  * Rules of thumb: inside the returned tree use If/Show/Range/map; outside it,
@@ -48,7 +48,7 @@
  *    association" inside div(...)/p(...) etc.
  *      => you passed something that isn't a Node or a string (e.g. a Handler,
  *         an int, a function name without ()). Wrap text in text(...),
- *         handlers in on_click(...)/on_input(...).
+ *         handlers in onClick(...)/onInput(...).
  *  - "too many arguments provided to function-like macro invocation" or
  *    GC_F33 undeclared
  *      => an element has more than 32 children/modifiers; split with frag().
@@ -179,7 +179,7 @@ static char *gc_fmt_i32(char *dst, i32 v) {
     if (v < 0) { *dst++ = '-'; v = -v; }
     return gwb_append_u32(dst, (u32)v);
 }
-static void fmt_i32(char *dst, i32 v) { *gc_fmt_i32(dst, v) = 0; }
+static void fmtI32(char *dst, i32 v) { *gc_fmt_i32(dst, v) = 0; }
 
 static const char *gc_vfmt(const char *fmt, __builtin_va_list ap) {
     char buf[512];
@@ -187,7 +187,7 @@ static const char *gc_vfmt(const char *fmt, __builtin_va_list ap) {
     for (const char *f = fmt; *f && p < end; f++) {
         if (*f != '%') { *p++ = *f; continue; }
         f++;
-        if (*f == 'd') { char tmp[16]; fmt_i32(tmp, __builtin_va_arg(ap, i32)); for (char *t = tmp; *t && p < end;) *p++ = *t++; }
+        if (*f == 'd') { char tmp[16]; fmtI32(tmp, __builtin_va_arg(ap, i32)); for (char *t = tmp; *t && p < end;) *p++ = *t++; }
         else if (*f == 's') { const char *s = __builtin_va_arg(ap, const char *); while (*s && p < end) *p++ = *s++; }
         else if (*f == '%') { *p++ = '%'; }
         else { *p++ = '%'; if (p < end) *p++ = *f; }
@@ -216,7 +216,7 @@ static const char *gc_rem(i32 quarters) {
 
 /* ---------------------------------------------------------------- state */
 
-typedef struct { u8 ok; i32 value; } Previous_i32;
+typedef struct { u8 ok; i32 value; } PreviousI32;
 
 typedef struct {
     const char *name;
@@ -268,10 +268,10 @@ static void gwbc_set_str(const char *name, const char *v) {
     GcState *s = gc_slot(name);
     u32 i = 0; while (v[i] && i < 127) { s->v_str[i] = v[i]; i++; } s->v_str[i] = 0;
 }
-static Previous_i32 gwbc_use_previous_i32(const char *name, i32 current) {
+static PreviousI32 gwbc_use_previous_i32(const char *name, i32 current) {
     (void)current;
     GcState *s = gc_slot(name);
-    return (Previous_i32){ s->has_prev, s->prev_i32 };
+    return (PreviousI32){ s->has_prev, s->prev_i32 };
 }
 
 /* ---------------------------------------------------------------- events */
@@ -302,7 +302,7 @@ static Node gc_on(Handler h, u16 kind) {
     return n;
 }
 
-/* GWC-style event wrappers: on_click(Prevent(save)) makes the host cancel
+/* GWC-style event wrappers: onClick(Prevent(save)) makes the host cancel
  * the default action; Stop halts propagation. Composable. */
 static Handler Prevent(Handler h) { gc_handler_ret[h] |= 1; return h; }
 static Handler Stop(Handler h) { gc_handler_ret[h] |= 2; return h; }
@@ -592,11 +592,10 @@ static void gwbc_boot(void) {
 #define component0(Name) static Node Name(void)
 
 /* Components are plain functions returning Node — call them directly, like
- * the Go package. Props/P_ are just compound-literal conveniences:
- *   CounterPanel(P_(CounterPanelProps, .name = name, .count = count))
+ * the Go package. Props is just a compound-literal convenience:
+ *   CounterPanel(Props(CounterPanelProps, .name = name, .count = count))
  */
 #define Props(Type, ...) ((Type){ __VA_ARGS__ })
-#define P_(Type, ...) ((Type){ __VA_ARGS__ })
 
 /* -- conditionals (Go-mirror capitals; C keywords own the lowercase) -- */
 #define If(cond, node) ((cond) ? (node) : Empty())
@@ -625,7 +624,7 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
 #define Range(count, render_fn) gwbc_range((i32)(count), (render_fn))
 
 /* -- lists (statement expressions; clang/gcc) -- */
-#define map_range(var, count, node_expr) (__extension__({ \
+#define mapRange(var, count, node_expr) (__extension__({ \
     Node gc__f = gc_alloc(K_GROUP); \
     for (i32 var = 0; var < (i32)(count); var++) gc_append(gc__f, (node_expr)); \
     gc__f; }))
@@ -638,7 +637,7 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
     gc__f; }))
 /* Keys are accepted (and type-checked) now, used by the future reconciler;
  * today this renders like map(). Keep keys stable and unique. */
-#define map_keyed(item, array, len, key_expr, node_expr) (__extension__({ \
+#define mapKeyed(item, array, len, key_expr, node_expr) (__extension__({ \
     Node gc__f = gc_alloc(K_GROUP); \
     for (u32 gc__i = 0; gc__i < (u32)(len); gc__i++) { \
         __auto_type item = &(array)[gc__i]; \
@@ -648,19 +647,19 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
     gc__f; }))
 
 /* -- hooks -- */
-#define state_i32(name, initial) i32 name = gwbc_use_i32(#name, (initial))
-#define state_bool(name, initial) i32 name = gwbc_use_i32(#name, (initial) ? 1 : 0)
-#define state_str(name, initial) char *name = gwbc_use_str(#name, (initial))
+#define stateI32(name, initial) i32 name = gwbc_use_i32(#name, (initial))
+#define stateBool(name, initial) i32 name = gwbc_use_i32(#name, (initial) ? 1 : 0)
+#define stateStr(name, initial) char *name = gwbc_use_str(#name, (initial))
 #define set(name, val) _Generic((val), \
     char *: gwbc_set_str, const char *: gwbc_set_str, default: gwbc_set_i32)(#name, val)
-/* Stringizes the TRACKED state's variable name — previous_i32(prev, count)
+/* Stringizes the TRACKED state's variable name — previousI32(prev, count)
  * reads the "count" slot's history, not a fresh "prev" slot. */
-#define previous_i32(name, val) Previous_i32 name = gwbc_use_previous_i32(#val, val)
+#define previousI32(name, val) PreviousI32 name = gwbc_use_previous_i32(#val, val)
 
 #define event(name) \
     Handler name = gwbc_handler(#name); \
     if (gwbc_handler_active(name))
-#define event_input(name, e) \
+#define eventInput(name, e) \
     Handler name = gwbc_handler(#name); \
     InputEvent e = { gwbc_input_value(name) }; \
     if (gwbc_handler_active(name))
@@ -668,7 +667,7 @@ static Node gwbc_range(i32 count, RenderIndexFn render) {
 /* -- text + children -- */
 static Node gwbc_text_i32(i32 v) {
     char buf[16];
-    fmt_i32(buf, v);
+    fmtI32(buf, v);
     return gwbc_text(gc_strdup(buf, gwb_strlen(buf)));
 }
 /* Text(any-ish): strings and i32 normalize to text nodes (GWC Text(any)). */
@@ -686,16 +685,16 @@ static Node gwbc_text_i32(i32 v) {
 
 /* -- attributes + handlers -- */
 #define id(v) gc_attr(GWB_ATTR_ID, v)
-#define test_id(v) gc_attr(GWB_ATTR_ID, v)
+#define testId(v) gc_attr(GWB_ATTR_ID, v)
 #define type(v) gc_attr(GWB_ATTR_TYPE, v)
 #define value(v) gc_attr(GWB_ATTR_VALUE, v)
 #define placeholder(v) gc_attr(GWB_ATTR_PLACEHOLDER, v)
-#define on_click(h) gc_on((h), GWB_EV_CLICK)
-#define on_input(h) gc_on((h), GWB_EV_INPUT)
+#define onClick(h) gc_on((h), GWB_EV_CLICK)
+#define onInput(h) gc_on((h), GWB_EV_INPUT)
 
 /* -- small helpers -- */
-static i32 min_i32(i32 a, i32 b) { return a < b ? a : b; }
-static i32 max_i32(i32 a, i32 b) { return a > b ? a : b; }
+static i32 minI32(i32 a, i32 b) { return a < b ? a : b; }
+static i32 maxI32(i32 a, i32 b) { return a > b ? a : b; }
 
 /* utility tokens (Tailwind-ish) — compiled to classes + one <style> sheet */
 #define Hover(token) gc_hover(token)
