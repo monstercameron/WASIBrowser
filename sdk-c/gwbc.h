@@ -22,6 +22,15 @@
  *   mapRange/map/mapKeyed/mapKeyedIf, bindI32(handler, i32)          lists
  *   useQuery(key, url) / refetchQuery(key)   non-blocking async data (host
  *     does the HTTP; completion re-renders — React Query, minus the queue)
+ *   atomI32/atomStr + useAtom/setAtom        shared global state, no drilling
+ *   memoI32/memoStr(key, deps, expr)         deps-cached derived values
+ *   keyedId("key")                           stable guest id of a keyed node
+ *
+ * REACT PARITY MAP: useState=stateX · useEffect ✓ · useContext ✓ ·
+ * useMemo=memoX · jotai-atoms ✓ · useRef=keyedId + C statics ·
+ * useCallback=N/A (handlers are static fns) · useReducer=event body + switch ·
+ * Suspense≈useQuery.loading · keys/reconciliation ✓ · portals/error
+ * boundaries: not yet (traps are the error story).
  *   stateI32/stateBool/stateStr, set(name, v), previousI32           hooks
  *   event(name){...} / eventInput(name, e){...}, onClick/onInput     handlers
  *   id("...") type/value/placeholder(...)   attributes
@@ -513,6 +522,77 @@ static void gc_run_effects(void) {
         }
     }
 }
+
+/* ------------------------------------------------------------------ atoms
+ * Shared global state with a typed handle (Jotai/GWC-UseAtom shaped).
+ * Define once at file scope; read/write from ANY component — no prop
+ * drilling. Backed by the same registry as state; writes re-render.
+ *   atomI32(interactionCount, 0);            file scope
+ *   i32 n = useAtom(interactionCount);       any component
+ *   setAtom(interactionCount, n + 1);        any event/effect
+ */
+typedef struct { const char *key; i32 initial; } AtomI32;
+typedef struct { const char *key; const char *initial; } AtomStr;
+#define atomI32(name, initialVal) static const AtomI32 name = { #name, initialVal }
+#define atomStr(name, initialVal) static const AtomStr name = { #name, initialVal }
+
+static i32 gwbc_use_atom_i32(AtomI32 a) { return gwbc_use_i32(a.key, a.initial); }
+static char *gwbc_use_atom_str(AtomStr a) { return gwbc_use_str(a.key, a.initial); }
+static void gwbc_set_atom_i32(AtomI32 a, i32 v) { gwbc_set_i32(a.key, v); }
+static void gwbc_set_atom_str(AtomStr a, const char *v) { gwbc_set_str(a.key, v); }
+
+#define useAtom(a) _Generic((a), AtomI32: gwbc_use_atom_i32, AtomStr: gwbc_use_atom_str)(a)
+#define setAtom(a, v) _Generic((a), AtomI32: gwbc_set_atom_i32, AtomStr: gwbc_set_atom_str)(a, v)
+
+/* ------------------------------------------------------------------- memo
+ * Deps-cached derived values (useMemo). The expression re-evaluates only
+ * when the deps fingerprint changes; otherwise the cached value returns.
+ *   const char *s = memoStr("summary", depsI32(total), strf("%d tasks", total));
+ */
+#define GWBC_MAX_MEMOS 16
+
+typedef struct { const char *key; Deps deps; i32 value; u8 has; } GcMemoI32;
+typedef struct { const char *key; Deps deps; char value[256]; u8 has; } GcMemoStr;
+static GcMemoI32 gc_memos_i32[GWBC_MAX_MEMOS];
+static u32 gc_memo_i32_count;
+static GcMemoStr gc_memos_str[GWBC_MAX_MEMOS];
+static u32 gc_memo_str_count;
+
+static GcMemoI32 *gc_memo_i32_slot(const char *key) {
+    for (u32 i = 0; i < gc_memo_i32_count; i++)
+        if (gc_streq(gc_memos_i32[i].key, key)) return &gc_memos_i32[i];
+    if (gc_memo_i32_count >= GWBC_MAX_MEMOS) gwbc_panic("gwbc: memo registry full");
+    GcMemoI32 *m = &gc_memos_i32[gc_memo_i32_count++];
+    m->key = key; m->has = 0;
+    return m;
+}
+static GcMemoStr *gc_memo_str_slot(const char *key) {
+    for (u32 i = 0; i < gc_memo_str_count; i++)
+        if (gc_streq(gc_memos_str[i].key, key)) return &gc_memos_str[i];
+    if (gc_memo_str_count >= GWBC_MAX_MEMOS) gwbc_panic("gwbc: memo registry full");
+    GcMemoStr *m = &gc_memos_str[gc_memo_str_count++];
+    m->key = key; m->has = 0;
+    return m;
+}
+
+#define memoI32(keyStr, depsv, expr) (__extension__({ \
+    GcMemoI32 *gc__m = gc_memo_i32_slot(keyStr); \
+    Deps gc__d = (depsv); \
+    if (!gc__m->has || gc__m->deps != gc__d) { \
+        gc__m->has = 1; gc__m->deps = gc__d; gc__m->value = (expr); \
+    } \
+    gc__m->value; }))
+#define memoStr(keyStr, depsv, expr) (__extension__({ \
+    GcMemoStr *gc__m = gc_memo_str_slot(keyStr); \
+    Deps gc__d = (depsv); \
+    if (!gc__m->has || gc__m->deps != gc__d) { \
+        gc__m->has = 1; gc__m->deps = gc__d; \
+        const char *gc__s = (expr); \
+        u32 gc__i = 0; \
+        while (gc__s[gc__i] && gc__i < 255) { gc__m->value[gc__i] = gc__s[gc__i]; gc__i++; } \
+        gc__m->value[gc__i] = 0; \
+    } \
+    (const char *)gc__m->value; }))
 
 /* ------------------------------------------------------------ query cache
  * React-Query-shaped async: useQuery(key, url) never blocks — it returns the
@@ -1195,6 +1275,14 @@ static Node gwbc_text_i32(i32 v) {
 /* Presence attribute: disabled(cond) emits disabled="" only when true.
  * Blitz honors it natively (disabled elements don't hit-test as clicks). */
 #define disabled(cond) ((cond) ? gc_attr(GWB_ATTR_DISABLED, "") : (Node){ 0 })
+
+/* -- refs: the DOM-ref equivalent. A keyed element's guest id is stable
+ * across renders; use it for imperative LL ops (gwb_focus etc.) from
+ * event/effect bodies. Returns 0 if the key has not rendered yet. -- */
+static u32 keyedId(const char *strKey) {
+    GcKeyed *k = gc_keyed_find(depsStr(strKey));
+    return k ? k->guestId : 0;
+}
 
 /* -- small helpers -- */
 static i32 minI32(i32 a, i32 b) { return a < b ? a : b; }

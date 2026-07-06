@@ -24,6 +24,10 @@ typedef struct {
 
 context(ThemeContext, ThemeValue);
 
+/* Shared global state: bumped by app-level events, read directly by
+ * DebugPanel — no prop drilling. */
+atomI32(interactionCount, 0);
+
 /* ------------------------------------------------------- primitive pieces */
 
 typedef struct {
@@ -390,12 +394,16 @@ typedef struct {
 } DebugPanelProps;
 
 component(DebugPanel, props, DebugPanelProps) {
+    i32 interactions = useAtom(interactionCount); /* atom read: no props */
+
     return Card(Props(CardProps,
         .title = "Debug",
         .rootExtra = propGroup(BgSlate50),
         .children = Children(
             p(class(U(TextXs, FgSlate500)),
                 text("Render count: %d", props.renderCount)),
+            p(class(U(TextXs, FgSlate500)),
+                text("Interactions: %d", interactions)),
             p(class(U(TextXs, FgSlate500)),
                 text("Last changed task id: %d", props.lastChangedTaskId)),
             p(class(U(TextXs, FgSlate500)),
@@ -459,10 +467,12 @@ component(DashboardApp, props, DashboardAppProps) {
     event(cyclePriority) {
         i32 next = draftPriority >= 3 ? 1 : draftPriority + 1;
         logf("[dashboard] priority %d -> %d", draftPriority, next);
+        setAtom(interactionCount, useAtom(interactionCount) + 1);
         set(draftPriority, next);
     }
 
     event(addTask) {
+        setAtom(interactionCount, useAtom(interactionCount) + 1);
         if (TaskStore_Add(store, draftTitle, draftPriority)) {
             logf("[dashboard] added task #%d \"%s\" (priority %d), %d total",
                 store->nextId - 1, draftTitle, draftPriority, store->count);
@@ -476,12 +486,14 @@ component(DashboardApp, props, DashboardAppProps) {
     event(cycleFilter) {
         logf("[dashboard] filter %s -> %s",
             Filter_Label(filter), Filter_Label(Filter_Next(filter)));
+        setAtom(interactionCount, useAtom(interactionCount) + 1);
         set(filter, Filter_Next(filter));
     }
 
     event(clearDone) {
         i32 before = store->count;
         TaskStore_ClearDone(store);
+        setAtom(interactionCount, useAtom(interactionCount) + 1);
         logf("[dashboard] cleared %d done task(s), %d remain",
             before - store->count, store->count);
     }
@@ -489,6 +501,7 @@ component(DashboardApp, props, DashboardAppProps) {
     eventI32(toggleTask, taskId) {
         if (TaskStore_Toggle(store, taskId)) {
             logf("[dashboard] toggled task #%d", taskId);
+            setAtom(interactionCount, useAtom(interactionCount) + 1);
             set(lastChangedTaskId, taskId);
         }
     }
@@ -496,9 +509,17 @@ component(DashboardApp, props, DashboardAppProps) {
     eventI32(removeTask, taskId) {
         if (TaskStore_Remove(store, taskId)) {
             logf("[dashboard] removed task #%d, %d remain", taskId, store->count);
+            setAtom(interactionCount, useAtom(interactionCount) + 1);
             set(lastChangedTaskId, taskId);
         }
     }
+
+    /* useMemo: recomputes ONLY when the task total changes (filter clicks,
+     * toggles, typing leave it cached). gSummaryComputes proves it. */
+    static i32 gSummaryComputes;
+    const char *summary = memoStr("storeSummary", depsI32(stats.total),
+        (gSummaryComputes++,
+         strf("%d task(s) tracked - summary computed %dx", stats.total, gSummaryComputes)));
 
     ThemeValue theme = {
         .appName = "GoWebComponents C",
@@ -549,7 +570,10 @@ component(DashboardApp, props, DashboardAppProps) {
                         ? (TaskFilter)previousFilter.value
                         : filter,
                     .currentFilter = filter,
-                ))
+                )),
+
+                p(id("store-summary"), class(U(TextXs, FgSlate500)),
+                    text("%s", summary))
             ),
         ))
     );
