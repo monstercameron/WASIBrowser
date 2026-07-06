@@ -1,0 +1,15 @@
+# task-dashboard e2e: seeded state, add, payload toggle, filter, clear-done
+wait 500
+dump logs/dash-0-initial.txt
+click #task-title
+type "Ship dashboard demo"
+click #add-task
+dump logs/dash-1-added.txt
+click #task-toggle-1
+dump logs/dash-2-toggled.txt
+click #cycle-filter
+dump logs/dash-3-open.txt
+click #cycle-filter
+click #clear-done
+dump logs/dash-4-cleared.txt
+quit

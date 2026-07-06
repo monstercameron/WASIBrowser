@@ -57,9 +57,7 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
   #app h1 { font-size: 22px; margin-bottom: 8px; }
   #app p { color: #9a9fa6; font-size: 14px; margin-bottom: 4px; }
   #mount { margin-top: 20px; }
-  #mount button { padding: 8px 18px; background: #2f6feb; color: #fff; border: 1px solid #4a86f5;
-                  border-radius: 6px; font-size: 14px; cursor: pointer; }
-  #mount button:hover { background: #4a86f5; }
+  /* No element styling inside #mount: guest apps own their look entirely. */
   #console { flex: 0 0 45%; display: flex; flex-direction: column;
              border-top: 1px solid #3a3d41; background: #161719; }
   #console-title { padding: 6px 12px; font-size: 12px; color: #9a9fa6;
