@@ -347,6 +347,41 @@ realism 8→9, Document structure 8→8.5. Naming-UX held at 7 — the ceremony 
 designed, not proven. Overall design ceiling **~8.8, flat**; the two discounts
 and the P0 identity-UX gate are unchanged.
 
+**Draft-12 refresh (naming substrate authored `02-WEB-NAMING.md` + operational
+layer mapped `OPERATIONAL-LAYER.md`/§22).** Same pattern, with one honest twist
+that cuts *against* over-confidence. What moved:
+
+- **Naming economics (7) is now mechanically specified, not just described.**
+  The substrate exists as a written spec — CT-style claim logs, quorum
+  confirmation, keytag assignment, *resolver policy that mechanizes native-first
+  ranking* (`local_petname`/`user_history` outrank every network signal), and
+  disputes that **demote, never erase**. The number stays **7** — still gated on
+  the P0 identity-UX study and log-quorum adoption — but its *defensibility*
+  jumped: "no registrars, ergonomic" is now an auditable mechanism with 11
+  schema objects, not a promise.
+- **Decentralization/censorship (7) firmed, not raised.** The "policy affects
+  presentation, never addressability; `ed:`/`b3:` always bypass" invariant is now
+  formal (naming §7/§12). Ceiling flat; the *guarantee* is now written down.
+- **The honest twist — the operational layer ENLARGES the visible gap.** §22 +
+  `OPERATIONAL-LAYER.md` surface ~16 previously-latent dimensions (governance,
+  abuse-ops, conformance, profiles/multi-device, offline **sync-conflict**,
+  market rules, enterprise, moderation, observability, i18n-a11y…) as **P1–P3
+  and mostly UNDESIGNED**. This does not lower the ~8.8 ceiling, but it does two
+  honest things: (a) it **caveats Offline (9 ceiling)** — offline-first is clean
+  for read-mostly apps, but stateful *collaborative* sync (CRDT/conflict) is now
+  an admitted, undesigned gap; and (b) it makes explicit that "the plan is done"
+  was always **protocol-scoped** — the operational surface between here and a
+  durable platform is now enumerated instead of hidden. Realized-today is still
+  ≈2; the distance to the ceiling is just more fully mapped.
+
+Part III (design-maturity) deltas: **Document structure 8.5→9** (naming half
+authored, operational layer mapped, repo/doc hygiene done), **Architecture
+9** holds (11 new schema objects, but CDDL still P0). A NEW honest line: a
+hypothetical *operational-design-maturity* axis would score **~2–3 today** —
+the layer is mapped, not designed. Overall protocol-design ceiling **~8.8,
+flat**; the refresh bought a specified naming mechanism and a more honest map of
+what is not yet built.
+
 **Bottom line:** on this rubric next.0 is not "a better web." It is a
 *different bet* — trade the incumbent's latent failures for the challenger's
 adoption risk. If built and adopted, it dominates the dimensions that matter
