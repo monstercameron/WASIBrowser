@@ -1,5 +1,5 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 2 — for critique, not yet pinned
+### Plan draft 3 — for critique, not yet pinned
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
@@ -68,6 +68,59 @@ end-to-end in §9's three flows.)
    swarm distribution, fountain transfer, oblivious fetch, IPv6-native peer
    services, petnames. *This plan, P3+ — designed now so early choices can't
    foreclose it, landed later.*
+
+## 0c. Getting started, reach, and migration (the developer's first question)
+
+A protocol nobody can adopt is a paper. The honest answers to "how do I try
+it," "who can open my link," and "what happens to my existing app":
+
+**Hello world in five minutes** (the whole loop, no ceremony):
+
+```
+$ web new hello              # scaffold: hello/app.c + manifest.toml
+$ cd hello && edit app.c     # a gwbc component; no JS, no build config
+$ web pack .                 # -> hello.webbundle  (content-addressed, b3:…)
+$ web publish --key ~/.web/id.ed25519 --channel stable
+  published  web://hello~blue-otter   (ed:cam.blue-otter, seq 1, 41 KB)
+$ web open web://hello~blue-otter      # runs locally; also now offline-cached
+```
+
+That is the entire toolchain surface for a first app: `new`, `pack`,
+`publish`, `open`. No bundler config, no framework install, no server.
+
+**Who can open it — the reach problem, answered honestly.** A new runtime
+starts at zero reach; pretending otherwise is how "better webs" die. Two
+concrete on-ramps instead of "install our browser or leave":
+
+1. **Embeddable engine + extension.** next.0 execution ships as a spec + a
+   small reference engine that plugs into existing browsers as a WASM
+   module / extension, so Chrome/Firefox/Safari users can open `web://` links
+   *without switching browsers* — the engine verifies and renders inside a
+   sandboxed element. This is the real distribution play; WASIBrowser is the
+   reference host, not a required download.
+2. **Honest v1 scoping.** Until that reach exists, v1 explicitly targets the
+   audiences where "you need the runtime" is already acceptable: internal
+   tools, LAN/classroom/offline deployments, developer tooling, and
+   privacy-sensitive apps whose users *want* the guarantees. General-web
+   replacement is the horizon (§7), not the v1 claim.
+
+**Migration — there is no magic port, and the plan won't pretend there is.**
+No JS → no automatic React/Vue/Svelte port; that is a real cliff (scorecard:
+authoring floor 7→5, tooling 8→3). The graded on-ramp:
+
+- **Greenfield** apps are written directly against the gwbc/Go/Rust SDKs.
+- **Legacy apps stay reachable** via the `dns:` ramp (§1a) — an existing
+  `https://x.com` app keeps working, addressable from inside next.0, while a
+  next.0 front end is built incrementally against it over RPC (§4).
+- **A compatibility shim** can package a static/SPA legacy site *as a bundle*
+  (its assets content-addressed, served offline) — a degraded but real
+  on-ramp that gets an existing site the permanence + offline wins without a
+  rewrite, trading away only the JS-driven interactivity.
+
+The pitch to a working dev is therefore not "rewrite everything to reach
+nobody"; it is "greenfield here for the guarantees, keep your legacy app
+reachable, and adopt incrementally." (Onboarding + shim are P1 deliverables,
+§8.)
 
 Design goals, priority-ordered (from Cam's brief):
 1. **High reliability / bus-proofing** — no single operator, resolver, or
@@ -143,22 +196,25 @@ web://<authority>/<path>[?query]
 
 authority :=  b3:<blake3-hash>            immutable bundle (identity == bytes)
            |  ed:<ed25519-pubkey>         mutable identity (signed pointer)
-           |  @<petname>                  YOUR petname book only — deterministic,
-                                          no global lookup, key-pinned (§1b)
+           |  @<petname>                  YOUR petname book only — local,
+                                          never shared (§1b); the app never
+                                          offers "copy @name" — share emits ~
            |  <label>[.<label>...]        native name: a delegation path,
                                           root-left — top label §1b, chain §1d
-           |  <label>[...]~<keytag>       any label pinned to its key (§1c)
-           |  dns:<name.tld>              explicit legacy DNS ramp
+           |  <label>[...]~<keytag>       any label pinned to its key (§1c) —
+                                          keytag is WORD-ENCODED (below)
+           |  dns:<name.tld>              legacy DNS (tag optional — silent
+                                          fallback, §1a)
 path      :=  route WITHIN the app (the app owns it; never a server path)
 ```
 
 **The spine of the model — one ladder, absolute → social:**
 
 ```
-web://b3:<hash>                these exact bytes             ABSOLUTE
-web://ed:<pubkey>              what this key signs           CRYPTOGRAPHIC
-web://cam~a7f2                 human label + crypto anchor   VERIFIABLE
-web://@maya                    your petname book, pinned     PERSONAL
+web://b3:blue-otter-cedar-…    these exact bytes             ABSOLUTE
+web://ed:cam.blue-otter        what this key signs           CRYPTOGRAPHIC
+web://cam~blue-otter           human label + crypto anchor   VERIFIABLE
+web://@maya                    your petname book (local)     PERSONAL
 web://maya                     global soft lookup            SOCIAL
 web://google.deepmind.chat     signed delegation chain (§1d)
 web://us.google.deepmind.chat  optional jurisdiction view (§1d)
@@ -167,24 +223,61 @@ web://us.google.deepmind.chat  optional jurisdiction view (§1d)
 > Hashes are absolute. Keyed names are cryptographic. Bare names are social.
 
 Trust degrades *gracefully* down the ladder and is **never bootstrapped from
-location** — the property the whole plan exists to establish. A name is not
-property; it is a human hint attached to a key, and the key (or the hash) is
-the identity.
+location**. A name is not property; it is a human hint attached to a key, and
+the key (or the hash) is the identity.
 
 - **`b3:` — content identity.** The authority *is* the BLAKE3 root hash of
   the bundle. Anyone — peer, CDN, USB stick — can serve it; the client
-  verifies. Immutable, cache-forever, offline-forever. This is the atom
-  everything else reduces to.
+  verifies. Immutable, cache-forever, offline-forever.
 - **`ed:` — publisher identity.** An Ed25519 public key. It resolves to a
-  small **signed manifest**: `{seq, bundle: b3:..., prev, sig}`. Updating an
-  app = publishing a new signed manifest. Trust is in the key, not in any
-  server. Key rotation via a signed successor record; loss of key = loss of
-  name (mitigations in §7).
-- **`dns:name.tld` — the ramp.** An explicitly-marked legacy name, resolved
-  via DNS TXT / `.well-known` to an `ed:` or `b3:` authority, so existing
-  names onboard without asking anyone. The `dns:` marker is required because
-  dots now mean *native delegation* (§1d), not DNS — legacy is the tagged
-  exception, native is the default. The endgame human-name layer is §1b–§1d.
+  small **signed manifest**: `{seq, bundle: b3:..., prev, title, publisher,
+  sig}`. Updating an app = publishing a new signed manifest. Trust is in the
+  key, not any server. Key rotation via signed successor record; loss of key
+  → §7 recovery (personal M-of-N *or* the institutional custody tier, §10.5).
+
+## 1a. Address ergonomics — the part that actually decides adoption
+
+Raw hashes and pubkeys are unspeakable, untypeable, and unmemorable, and a
+naming system that fails the billboard/phone-call test loses to `x.com` no
+matter how good its cryptography is. Five hard rules make the addresses
+human — they are Tier-0 UX, not polish:
+
+1. **No raw hash or pubkey is ever the primary user-facing string.** Every
+   manifest MUST carry `title` + `publisher` labels; chrome always renders
+   `Title · publisher · short-tag`, with the full hash reachable only behind
+   copy-link / QR. Even an anonymous `b3:` bundle shows `Untitled ·
+   b3:blue-otter-cedar…` (word-prefix + copy), never 64 raw hex.
+2. **Keytags are word-encoded, not hex.** A keytag is drawn from a fixed
+   2048-word dictionary (BIP39-style: short, unambiguous, autocorrect-able,
+   no homographs) — `cam~blue-otter` (2 words ≈ 22 bits), extending to
+   `cam~blue-otter-cedar` (33 bits) and beyond. Speakable over a phone,
+   typo-resistant (dictionary snap), no shift keys. `~a7f2` is dead.
+3. **Keytag length scales with claim density, with a hard floor.** The
+   browser shows the *shortest* tag that is collision-free against the
+   name's currently-visible quorum claim set, never below a **3-word / ~33-bit
+   minimum**, and auto-lengthens as a name gets more claimants. (This closes
+   the draft-2 contradiction where a fixed 4-hex/16-bit tag both claimed
+   "infinite anchors" *and* fell to a birthday collision after ~300 claims
+   and to prefix-grinding in seconds. Word-count is a function of contention,
+   not a constant.)
+4. **Input is lenient; canonicalization is strict.** The address bar accepts
+   `cam~blue-otter`, `cam blue otter`, `cam-blue-otter`, and pasted links
+   interchangeably, normalizing to the canonical `~` form — so `~` (a
+   shift/long-press key on many layouts) is never a *required* keystroke.
+   `@` and `~` are display/canonical sigils, not typing hurdles.
+5. **Legacy `dns:` resolves silently.** Typing a bare dotted string
+   (`amazon.com`) that fails native delegation *and* whose final label is in
+   the browser's shipped, read-only, **non-authoritative** legacy-TLD table
+   is retried as `dns:` automatically and shown labeled **"legacy web
+   (DNS)"** — never confused with a verified native identity. This preserves
+   every existing bookmark, billboard, and muscle-memory habit on day one.
+   (The table is a fixed fallback list, not a trust root: it decides *only*
+   whether to try the DNS ramp, never what is trusted — §10 R1 still holds.)
+
+> Net: users type what they always typed (`amazon.com` still works), share a
+> speakable pinned form (`cam~blue-otter`), and never hand-copy a hash. The
+> ugly cryptographic truth stays *underneath* the human label, exactly where
+> §10.7 needs it.
 
 ## 1b. Human names without registrars  *(Tier 2 — social; designed now, lands at scale)*
 
@@ -245,18 +338,21 @@ web://cam/todos/today          if cam's manifest is a DIRECTORY (below),
   delegation chain (§1d); a `dns:`-tagged name is the legacy ramp. Native
   and legacy cannot collide because legacy carries the explicit marker.
 - **One claim, many apps.** A name binds to one key; that key's manifest
-  may be a **directory** — a signed map of sub-apps (`todos -> b3:...,
-  blog -> b3:...`), selected by the first path segment. Namespacing comes
-  from the publisher, not from the registry — no sub-name claims, no
-  sub-registrars, nothing new to squat.
+  declares `kind: app` **or** `kind: directory`. A directory is a signed map
+  of sub-apps (`todos -> b3:…, blog -> b3:…`) selected by the first path
+  segment; an app owns its whole path. The explicit `kind` discriminator
+  removes any ambiguity between "`cam/blog` = the directory's blog app" and
+  "`cam/blog` = a route inside a single `cam` app." Namespacing comes from
+  the publisher, not the registry — nothing new to squat.
 - **Confusables are folded before claiming.** Names are stored and matched
   by their skeleton (Unicode confusable-folding; ascii-only in v1 makes
   this trivial): `cam`, `càm`, and cyrillic `сam` are the *same claim* —
   the phishing classic dies at the registry instead of in the URL bar.
-- **The browser shows the keytag.** Chrome (not the name itself) displays
-  `cam · a7f2` — a short fingerprint of the bound key. Names are for
-  humans; the keytag is the tell when something claims to be `cam` but
-  isn't bound to the key your petname book / history knows.
+- **The browser shows the word-keytag.** Chrome (not the name itself)
+  displays `cam · blue-otter` — the word-encoded fingerprint of the bound
+  key (§1a). Names are for humans; the keytag is the tell when something
+  claims to be `cam` but isn't bound to the key your petname book / history
+  knows.
 
 Zooko's triangle honesty: this is *trust-minimized*, not trustless — global
 human names need SOME shared ordering, and a quorum of mutually-auditing,
@@ -266,16 +362,22 @@ users/communities bind their own labels to `ed:` keys (imported sets, like
 a contacts book), which covers the "names I actually type" case with zero
 global coordination at all.
 
-**The `@` sigil = your book, deterministically.** `web://@maya` resolves
-*only* through your local petname book — no global lookup, no ambiguity, no
-chooser. First contact is explicit: you open `web://maya~d81f` (or a shared
-`ed:` link), the chrome shows `Maya · d81f — unknown to you`, and a one-tap
-"save as Maya" writes `Maya → ed:5cb92a…` with keytag `d81f` pinned. From
-then on `@maya` is a hard, personal binding. The saved keytag is the
-impersonation tripwire: if a later `maya` presents a different key, the
-chrome flags `d81f ≠ saved` rather than silently resolving. Bare global
-`web://maya` stays soft/social (§1c); `web://@maya` is yours and pinned —
-the distinction that keeps convenience and safety from fighting.
+**The `@` sigil = your book, and it NEVER leaves your machine.** `web://@maya`
+resolves *only* through your local petname book — no global lookup, no
+ambiguity, no chooser. It is deliberately **not** the shareable form: 15 years
+of Twitter/Mastodon/email trained everyone that `@name` is a global handle, so
+next.0 makes the *portable* form the pretty one instead. The browser's
+**Share** button always emits `maya~blue-otter` (the pinned, portable,
+key-anchored form), never `@maya`, and the UI never offers "copy @name" —
+killing the "I sent my friend @maya and it didn't work" footgun before it
+exists. First contact is explicit: you open a shared `maya~blue-otter` (or
+`ed:` link), chrome shows `Maya · blue-otter — unknown to you`, and one tap
+"save as Maya" writes `Maya → ed:5cb92a…`, keytag pinned. Thereafter `@maya`
+is a hard, personal, typeable binding, and the pinned keytag is the
+impersonation tripwire: if a later `maya` presents a different key, chrome
+flags `blue-otter ≠ saved` rather than silently resolving. Bare global
+`web://maya` stays soft/social (§1c); `@maya` is yours and typed; `maya~keytag`
+is what you share.
 
 ## 1c. Expansive & equitable: why no one parks  *(Tier 2 — social)*
 
@@ -288,11 +390,13 @@ economically dead rather than merely discouraged.
 **The parking economy needs three legs. next.0 removes all three:**
 
 1. **Exclusivity — gone.** You cannot corner a name others may also claim.
-   The durable, globally-unique address is `name~keytag` (a short
-   fingerprint of the bound key): `web://cam~a7f2`. That gives ~2^k anchors
-   per string, so *the namespace is effectively infinite* — every person
-   named cam gets a real, permanent `cam~<theirs>`. Bare `cam` is only a
-   local convenience, resolved per-user (§1b), never a deed.
+   The durable, globally-unique address is `name~keytag` — the word-encoded
+   fingerprint of the bound key (§1a): `web://cam~blue-otter`. Because the
+   keytag *lengthens with claim density* (§1a rule 3, hard floor ~33 bits,
+   growing), the anchor space per string is effectively unbounded *and*
+   collision-safe at every popularity level — every person named cam gets a
+   real, permanent `cam~<theirs>`. Bare `cam` is only a local convenience
+   (§1b), never a deed.
 2. **Transferability — gone** (§1b: names are key-bound, no transfer record
    type). You cannot sell what cannot move.
 3. **Passive yield — gone.** A claimed-but-unpublished name resolves to
@@ -331,6 +435,27 @@ web://os/tetris           that governs how names WITHIN it are allocated
   trust-resolved. The actual city wins bare `nyc` by attestation and
   petname adoption, not by an exclusive grant — and if it doesn't, `nyc~<city
   key>` still works for everyone who trusts that key.
+
+**The defaults bundle — one concrete mechanism for the three kingmakers.**
+Soft resolution needs *some* shipped defaults (the trust-ranking, the
+commons-namespace set, the R7 high-risk category list, §10.2). Instead of
+three hidden vendor lists, all three live in a single **signed, versioned
+defaults bundle** — itself a `web://` `ed:` object, updated and forkable
+exactly like an app (§11.6). Its initial content is published *with the
+spec*, and the default trust-ranking is a documented, criticizable function,
+not a black box:
+
+```
+default_rank(claim) = w1·petname_import_frequency   (how many books pin it)
+                    + w2·log_quorum_age             (how long quorum-attested)
+                    + w3·revocation_clean_history
+                    − w4·look_alike_penalty         (confusable to a pinned name)
+```
+
+Any user or community swaps the bundle in one action; a browser fork ships
+its own. The residual soft power of "the default most people never change" is
+real and stated (§7.1) — but a specified, auditable, forkable default beats
+an unspecified one, and this is as concrete as the app-update path it reuses.
 
 **Equity is not automatic — the honest open issues:**
 
@@ -534,8 +659,26 @@ solvable, and the plan says so. What the platform does:
    last read-only data bundle referenced from the sunset manifest — the
    "everlasting wasm + everlasting final dataset" ending, instead of a
    zombie.
-Per-user live data whose operator vanished is declared out of scope: no
-protocol resurrects a dead database, and pretending otherwise is web3-brain.
+Per-user live data whose operator vanished is not magically resurrectable —
+no protocol revives a dead database. But that must not be a shrug, because
+**most real software (SaaS, CRUD, anything with per-user state) is exactly
+this shape** — not the read-mostly blog the "immortal bytes" pitch flatters.
+So the honest position, sharpened:
+
+- **The pitch is scoped honestly.** next.0 is the strongest substrate for
+  static/read-mostly apps *and* for RPC-backed services with responsible
+  operators; per-user live-data durability is the operator's responsibility,
+  exactly as it is today. It does not claim to make a careless operator's DB
+  survive their carelessness.
+- **Service succession is promoted from paragraph to P1/P2 deliverable**
+  (§8): a *reference implementation* of a service handing off to a successor
+  key mid-session, with the client following the succession record and
+  re-verifying — because that mechanism is what actually lets a CRUD app be
+  trusted for the long term, and a mechanism only counts once it's testable.
+- **Data export is a capability, not a favor.** An app declaring per-user
+  storage must expose a signed export (the user's own data as portable `b3:`
+  objects), so operator death degrades to "you still hold your data" instead
+  of "it's gone" — the sovereignty invariant (§0b) applied to app state.
 
 ## 3. Distribution: swarm + fountain, gateway as training wheels  *(Tier 1 accelerators; gateway ramp is Tier-0-faithful)*
 
@@ -590,9 +733,14 @@ piece:
   symbols instead of a retransmit round trip (resilience #2).
 - Symbols are self-identifying `(root hash, block no, symbol id)`; a merkle
   proof accompanies each block so verification stays incremental.
-- IPR note: RaptorQ has Qualcomm patent statements with RAND terms; the
-  open `Wirehair`/LT-code family is the fallback if that's a problem.
-  Decision needed (flagging for critique).
+- **Codec decision (made): default to the open `Wirehair`/LT-code family**,
+  behind a `SymbolCodec` trait. RaptorQ (RFC 6330) has better overhead but
+  carries Qualcomm RAND patent statements, and shipping the wire format on a
+  patented codec then migrating means a format break — inconsistent with the
+  no-gatekeeper ethos. RaptorQ stays an *optional pluggable accelerator*,
+  negotiated per-transfer, usable only where its RAND terms are acceptable.
+  The trait keeps the wire self-describing (codec id per symbol block), so
+  the choice never fossilizes.
 
 **Bus-proofing** (the other reading of the brief): every layer above must
 survive any single party vanishing — publisher (mirrors keep seeding;
@@ -655,6 +803,43 @@ host              := wasmtime import, standard across all SDKs; the SPEC
   relay without apps noticing. TLS's CA tree is not involved.
 - **Legacy ramp**: `rpc-over-HTTPS` POST binding to a gateway, so a plain
   web server can host a service on day one.
+
+### 4a. Payment as a first-class capability (how developers get paid)
+
+The web's one native monetization model is surveillance advertising, and
+next.0 deletes its fuel (cookies, tracking, ambient identity). Removing the
+bad model without offering *any* replacement would be a regression for the
+majority of working developers (commercial SaaS, content, indie) — so payment
+is a declared capability, peer to storage and RPC, not an afterthought:
+
+```
+capability payments := a declared payment-service the app may call, exactly
+  like any RPC service (ed: identity, iface hash, user-granted, revocable)
+
+  payments.quote(item, amount, currency)      -> signed quote
+  payments.charge(quote_id)                   -> one-shot, user-confirmed
+  payments.subscribe(plan_id)                 -> recurring, user-confirmed
+  payments.status(id) / payments.refund(id)
+```
+
+- **Rail-agnostic**: the payment *service* bridges to whatever settles —
+  cards, bank rails, a stablecoin, a prepaid browser balance — the app and
+  the browser only see the capability + signed receipts. next.0 does not mint
+  a coin (it never does); it standardizes the *request*, not the money.
+- **User-confirmed in trusted chrome** (§10.6): a charge is a browser-native
+  prompt showing amount + payee identity (`Reflection Service · blue-otter`)
+  — apps can't draw fake payment UI, and app-scoped identity means the payee
+  learns only a per-app pseudonym, not a cross-site profile (privacy that ad
+  networks structurally cannot offer).
+- **Micropayments become viable** precisely because there is no per-request
+  session/redirect tax: "$0.002 per article, no account" is one signed
+  `charge`, enabling models the ad web made impossible. This is a *feature
+  the incumbent can't match*, not just parity.
+
+A full payments spec is out of scope for draft 3; declaring the capability +
+its trusted-chrome + privacy shape closes the scorecard's most-cited hole and
+turns "you can't make money" into "you can charge without an ad network or a
+data broker."
 
 ## 4b. The wire is binary — no document transport  *(Tier 0 — invariant)*
 
@@ -756,30 +941,36 @@ per-app privacy profiles (§11).
    may be too clever; a state simply won't accept "you can label but not
    control." Does the provenance overlay actually get used if it has no
    teeth, or does it collapse back to either DNS or irrelevance?
-1. **Human names (§1b/§1c).** Non-exclusive + keytag-anchored + namespaces-
-   as-commons kills the parking *economy* (no exclusivity, no resale, no
-   passive yield) and the scarcity that drove it — but trades a hard
-   guarantee for soft resolution: bare `web://bank` is no longer a promise,
-   it's a per-user lookup. That's honest (exclusive FCFS was *also* a
-   phishing vector — a squatter just grabs `bank`), and safety moves to
-   petnames + trust attestations + the keytag the chrome always shows — but
-   it puts real weight on the default trust-ranking, which is a kingmaker
-   surface. Three governance questions I can't answer alone: (a) who runs
-   the first quorum of logs, (b) who curates the default commons-namespace
-   set shipped in the browser, (c) how is the default soft-resolution
-   ranking kept from becoming a single vendor's chokepoint? My instinct:
-   all three pluggable + auditable, none baked in, ship with a small
-   plural default and let it fork. Is that a cop-out or the whole point?
-2. **Key loss = name loss** for `ed:`. Mitigations: social-recovery
-   successor records (signed by M-of-N recovery keys named at creation);
-   still weaker than "call GoDaddy". Acceptable?
+1. **Human names + the three kingmaker surfaces — now with a concrete
+   mechanism (§1c-defaults).** Non-exclusive + keytag-anchored + namespaces-
+   as-commons kills the parking *economy* but trades a hard `web://bank`
+   guarantee for soft resolution, putting weight on three defaults that could
+   silently centralize: the trust-ranking, the commons-namespace set, and the
+   R7 high-risk category list. **Decision:** all three ship as ONE signed,
+   versioned **defaults bundle** — itself a `web://` `b3:`/`ed:` object,
+   forkable and swappable exactly like an app update (§11.6), with its initial
+   content *published alongside the spec*, not deferred. The default
+   trust-ranking is a **documented, criticizable algorithm** — `score =
+   petname-import-frequency + log-quorum-age + revocation-history −
+   look-alike-penalty` — not "TBD." A specified, auditable, forkable default
+   is strictly better than an unspecified one; the residual question is only
+   *who ships the first bundle*, and the answer is "anyone can ship a
+   competing one." Remaining honest risk: most users never swap defaults, so
+   the default author has real soft power — mitigated, not eliminated, by
+   forkability + transparency.
+2. **Key loss — two tiers, not one (§10.5).** Personal identities use M-of-N
+   social recovery (weaker than "call GoDaddy," fine for personal stakes).
+   Regulated/institutional identities use the **institutional custody tier**
+   (§10.5): hardware-backed threshold signing via named, bonded custodians
+   that assist *recovery* without ever gaining authority over content — the
+   analog to registrar/IdP support apparatus, made opt-in and non-seizing.
 3. **DHT realities**: sybil attacks, NAT traversal, mobile churn. The
    gateway ramp means the DHT can be *best-effort* for years without hurting
    reliability. Is that honest enough or does it quietly re-centralize us
    onto gateways (my main worry)?
-4. **RaptorQ IPR** (§3). Decide: RaptorQ (best-in-class, RAND patents) vs
-   Wirehair (open, slightly worse overhead). Cheap to abstract behind a
-   symbol-codec trait; expensive to change wire formats later.
+4. **RaptorQ IPR — decided (§3).** Default to open Wirehair/LT behind the
+   `SymbolCodec` trait; RaptorQ is an optional negotiated accelerator only.
+   No longer open.
 5. **Seeding incentives without tokens**: publishers + gateways + altruism +
    default seed-what-you-run (capped). BitTorrent proves this works for
    things people care about; it does rot for the long tail. The long-tail
@@ -810,29 +1001,57 @@ per-app privacy profiles (§11).
 
 ## 8. Phases (each lands a demo in this repo)
 
-- **P0 — specs.** WEB-SECURITY (§10 — the invariant that governs all others)
-  / WEB-NAMING / WEB-BUNDLE / WEB-RPC drafts (WEB-SWARM sketched). Exit:
-  you've critiqued them.
-- **P1 — hashes over HTTP.** Chunk store + bundler CLI (`web pack`) +
-  `web://b3:...` loading via a gateway (a static file server) with full
-  verification + offline relaunch from the store + compile cache.
-  *Demo: task-dashboard-c loads from `web://b3:...`, then loads again with
-  the network cable pulled.*
+- **P0 — specs + the existential UX test.** WEB-SECURITY (§10) / WEB-NAMING /
+  WEB-BUNDLE / WEB-RPC drafts (WEB-SWARM sketched). **AND the §10.7 gate,
+  treated as a real deliverable, not a closing remark:** build the actual
+  identity chrome (word-keytag chip, not a diagram) and usability-test it
+  against a control group trying to detect impersonation — `google.com` vs
+  `Google · blue-otter`. If it can't beat the naive lock-icon + domain model
+  in a real study, the project's core bet ("keys can be made human", §10.7)
+  is falsified and *that* is the finding, before more protocol code. Exit:
+  specs critiqued **and** the chrome beats the control.
+- **P1 — hashes over HTTP + the 5-minute onboarding.** Chunk store + bundler
+  CLI (`web new`/`web pack`/`web open`, §0c) + `web://b3:...` loading via a
+  gateway with full verification + offline relaunch + compile cache, **plus a
+  legacy-app compatibility shim** (package a static/SPA site as a bundle) so
+  existing apps get an on-ramp. *Demo: `web new` → `web pack` → open under 5
+  minutes; task-dashboard-c loads from `web://b3:...`, then again with the
+  cable pulled; a legacy static site opens as a bundle offline.*
 - **P2 — publisher identity + lifecycle.** `ed:` manifests with the §2b
   lifecycle fields, `web publish`, update flow with delta fetch (only
   changed chunks move), BUNDLE_OUTDATED event + gwbc `onUpdateAvailable`,
   store GC honoring retain/sunset. *Demo: v2 of the dashboard ships by
   moving <10% of its bytes; the still-running v1 shows an update banner
   within a minute; `web publish --sunset` makes the store stop seeding it.*
-- **P3 — RPC v1.** Host import + RPC_RESULT events + gwbc `useRpc` hook;
-  rpc-over-HTTPS binding; a demo service (the todos backend) with a signed
-  key, reached by pubkey. *Demo: RemoteTodos card, but the endpoint moves
-  hosts mid-session and nothing breaks.*
-- **P4 — LAN + swarm.** mDNS peer fetch, then DHT + QUIC + fountain codec.
-  *Demo: two machines, cable between them, no internet: app transfers and
-  runs.*
+- **P2.5 — names, equity, and devtools.** IDN + confusable-folding + a
+  verifiable-delay-function claim cost (VDF, wall-clock not hashpower, so a
+  phone claims as easily as a datacenter) — *gating any name-claim UI before
+  this ships*; word-keytag rendering (§1a); the defaults bundle (§7.1) with
+  its published initial content; and a **devtools MVP** (wasm stack traces
+  mapped to source, an RPC-call inspector, the §11.4 Task Manager surfaced).
+  *Demo: claim a name from a phone; a look-alike claim is flagged; step a
+  wasm crash back to its source line.*
+- **P3 — RPC v1 + payments + service succession.** Host import + RPC_RESULT
+  events + gwbc `useRpc`; rpc-over-HTTPS binding; the §4a `payments`
+  capability with trusted-chrome confirm; **a reference service that hands
+  off to a successor key mid-session** (§2b), the client following + re-
+  verifying. *Demo: RemoteTodos endpoint moves hosts AND rotates to a
+  successor key mid-session, nothing breaks; a $0.01-per-read charge clears
+  in a browser-native prompt.*
+- **P4 — LAN + swarm.** mDNS peer fetch, then DHT + QUIC + Wirehair fountain
+  codec (§3). *Demo: two machines, cable between them, no internet: app
+  transfers and runs.*
 - **P5 — oblivious mode.** Relay protocol + private fetch toggle in the
   toolbar. *Demo: gateway logs show relay ip, relay logs show no hashes.*
+
+**Renderer-capability scoping (honest, per the crown-jewel rule).** The
+scorecard is blunt that UI richness regresses (9→7): Blitz trails Blink on
+forms/IME/CSS/media. So v1's UI ambition is scoped to what the renderer
+already does well — **forms, lists, dashboards, media-light apps** — which is
+exactly the internal-tools/SaaS target of §0c. General-web UI parity is a
+tracked, resourced work-stream against the vendored Blitz branch, not a v1
+claim; next.0 does not assert "build literally anything" until the renderer
+can, and says so rather than over-promising the incumbent's crown jewel.
 
 **Every phase is small but architecturally faithful (§0b).** The first slice
 is not a toy that gets replaced; it is a small instance of the final
@@ -1028,6 +1247,19 @@ Plus: rollback protection (monotone `seq`), update delay for widely-installed
 apps, revocation records, transparency-log inclusion of updates, and a
 browser-native warning on any unusual key change (R5).
 
+**Institutional custody tier (the "call GoDaddy" analog, done right).**
+Regulated entities need a recovery/assurance apparatus that personal M-of-N
+can't provide. The opt-in institutional tier: the publisher root is
+**hardware-backed threshold-signed** (HSM/TPM, e.g. 3-of-5) and its recovery
+key set names **bonded custodians** — escrow/legal entities that can
+*assist recovery* (reconstitute a lost threshold share under documented
+process) but **never gain authority over content**: they hold recovery
+shares, not the release key, and cannot sign an update or seize a name. This
+gives banks/health/gov the support-desk + legal-process + insurance model
+they require, as an explicit higher-assurance opt-in, without reintroducing a
+seizing authority (§1d) or a CA-tree root. Personal users keep the frictionless
+M-of-N default; the tiers differ in custody rigor, not in who owns the bytes.
+
 ### 10.6 Trusted chrome is sacred (the browser-killer class)
 
 Apps cannot draw permission prompts, identity badges, address bars, or "verified"
@@ -1075,13 +1307,14 @@ and the host maps each to a specific import + WASI config + runtime gate.
 
 ### 11.2 The capability vocabulary (manifest-declared, browser-granted)
 
-**Storage** (app-private · user-picked file r/w · folder r/w) · **Network**
-(none · RPC-to-declared-service · declared-gateway-fetch · LAN-peer ·
-public-swarm · raw-socket ≈ never) · **Identity** (anonymous · app-scoped ·
-contact-share · org-share) · **System** (notifications · clipboard r/w ·
-camera+mic · background · device discovery) · **Execution budgets** (memory ·
-fuel/CPU · background-minutes · storage quota · network quota). No raw WASI
-term ever reaches the user surface.
+**Storage** (app-private · user-picked file r/w · folder r/w · signed export)
+· **Network** (none · RPC-to-declared-service · declared-gateway-fetch ·
+LAN-peer · public-swarm · raw-socket ≈ never) · **Identity** (anonymous ·
+app-scoped · contact-share · org-share) · **Payments** (declared
+payment-service · charge · subscribe, §4a) · **System** (notifications ·
+clipboard r/w · camera+mic · background · device discovery) · **Execution
+budgets** (memory · fuel/CPU · background-minutes · storage quota · network
+quota). No raw WASI term ever reaches the user surface.
 
 ### 11.3 The gate — AppPolicy + per-import checks (the heart)
 
@@ -1197,3 +1430,26 @@ Usable      because permissions are human-level, rare, staged, specific.
 Resilient   because updates are signed, cached, rollbackable, and diffed.
 Transparent because identity, powers, resources, and history are visible.
 ```
+
+## 12. Prior art — and why this isn't just $EXISTING_THING
+
+Nearly every primitive here has a precedent, and a technical audience will
+ask "how is this not X?" on sight. Honest lineage + the actual differentiator:
+
+| System | Closest overlap | What next.0 adds that it lacks |
+|---|---|---|
+| **IPFS / IPNS** | content-addressed chunks + mutable name pointers | an *application runtime* — capability sandbox, RPC-first services, no-JS DOM ABI, a security/permission/update model; IPFS distributes bytes, it doesn't run or govern apps |
+| **Dat / Hypercore** | signed append-only logs over content-addressed chunks (the closest analog) | the app + service + capability + payments + browser-chrome stack on top; Hypercore is the distribution substrate, not the platform |
+| **Secure Scuttlebutt** | signed identities, offline-first, no global namespace | web-scale distribution (swarm/gateways/fountain), RPC services, a runtime; SSB is a social-feed protocol, not an app platform |
+| **Urbit** | personal signed identity + own runtime | wasm/any-language + browser integration + no bespoke VM/address-space or land-sale economics; Urbit reinvents the whole stack and sells identity |
+| **Solid** | user-owned data, decoupled from apps | binary DOM ABI + capability sandbox + no-JS + content addressing; Solid is data-pods over the *existing* web stack (HTTP/JS/OAuth), which is the stack next.0 replaces |
+| **DID / Verifiable Credentials** | decentralized keys as identity | a concrete runtime, naming ergonomics, and distribution; DIDs are an identity spec, not a web |
+| **BitTorrent** | swarm distribution, fountain-adjacent | verification-as-trust, mutable identities, RPC, an app model; BT moves files, full stop |
+
+**The one-line differentiator:** the prior art is almost all *distribution or
+naming or identity* layers. next.0 is an **application runtime with a
+security, capability, payment, and UX model** that happens to use
+content-addressed distribution — the layer all of the above deliberately left
+to "someone else's app." The bet is that packaging them into one coherent
+runtime with *excellent ergonomics* is the thing none of them shipped, and
+the thing that decides adoption.
