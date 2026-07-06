@@ -1,69 +1,84 @@
 # GoWebBrowser
 
-A **wasm-first** browser platform. Any language compiles to wasm and drives the page
-through a fast binary DOM ABI — **zero JavaScript anywhere**, none of the per-call /
-string-marshaling / wrapper-object overhead of the JS DOM. Go is the first guest
-language (`GOOS=wasip1`, no `syscall/js`), not the only one: the ABI is a
-language-neutral spec and `sdk/` is just its first binding.
+A **wasm-first** browser platform. Any language compiles to wasm and drives the
+page through a fast binary DOM ABI — **zero JavaScript anywhere**, none of the
+per-call / string-marshaling / wrapper-object overhead of the JS DOM. The
+rendering engine (Blitz: Stylo + Taffy + Vello, no JS) is a commodity behind a
+seam; **the ABI is the product** (`docs/ABI.md`).
 
-Rendering engine: **Blitz** (DioxusLabs — blitz-dom + Stylo style + Taffy layout +
-Vello/wgpu paint, no JS), run **out-of-process** behind the frozen `engine.Engine`
-seam. The engine is a yoinked commodity; **the ABI is the product.** See
-`plan-blitz.md` for the pinned plan and ABI laws (batched writes, snapshot reads,
-language-neutral spec).
-
-## Pipeline
+## Architecture (v2 — single process)
 
 ```
-Go app  --GOOS=wasip1-->  app.wasm
-   |  (//go:wasmimport submit_batch)
-   v
-Go broker  --GDOM binary frames (protocol/) over stdio/pipe-->  renderer.exe (Rust)
-                                                                  decode -> blitz-dom DocumentMutator
-                                                                  Stylo style -> Taffy layout -> Vello paint
-                                                                  winit events <- hit-test -> broker -> wasm
+app.wasm (Go / Rust / C / ...)          renderer.exe (Rust)
+  gwb.submit(batch) ────────────────▶   wasmtime ─▶ GWB decoder ─▶ blitz-dom
+  gwb_events(records) ◀────────────     hit-test/IME/keyboard events
+                                        Stylo style ─▶ Taffy layout ─▶ Vello paint
 ```
+
+One process, no pipes: guest→DOM is a function call. Writes are batched binary
+ops (16-byte records + string heap, names as u32 atoms); everything host→guest
+is an event record; reads are observations, never sync interrogation.
+
+## Benchmarks (docs/BENCHMARKS.md, 2026-07-06, Snapdragon X2)
+
+Identical DOM workloads: C guest on the GWB ABI vs **vanilla JS** in Chromium.
+
+- **The boundary:** 55,002 ops encode + cross + decode = 1.6 ms (**~29 ns/op**,
+  ~6× cheaper per op than the JS binding layer; 1 crossing vs 45,000 calls).
+- **Interaction latency:** full click→DOM-applied round trip = **25 µs** —
+  below what Chromium's own coarsened clock can measure.
+- **Frame-realistic (mutations + layout):** GWB wins every workload by
+  **64–93%** (e.g. create-5k: 14 ms vs 63 ms).
+- **Mutation-only** (layout excluded — the JS engine's home game): GWB wins
+  update-heavy workloads by 27–32%; vanilla JS still leads bulk create/clear
+  by 12–33% (Blitz's per-node construction; three of our perf patches already
+  live on the local `gwb-perf` engine branch, more upstreamable).
+- The JS column is *vanilla* DOM — the floor no framework reaches. **React
+  (vdom diffing on top of vanilla) loses every category to GWB outright.**
 
 ## Layout
 
-- `protocol/` — GDOM binary DOM-patch wire format (encoder + decoder/Visitor). Frozen seam. **Tested.**
-- `engine/` — `engine.Engine` seam + `TestDOM` pure-Go reference engine. Frozen seam. **Tested.**
-- `host/` — wazero WASI loader: `gobrowser_dom` import, mount, event pump, `Capabilities` sandbox. **Tested.**
-- `sdk/dom`, `sdk/app`, `eventmsg`, `examples/counter` — wasm-side SDK + counter app. **Tested.**
-- `webkitengine/` — engine adapter over IPC (GWBI framing, loopback transport). **Tested.**
-  Kept as the framing donor for `blitzengine/`; renamed/reworked in milestone 3.
-- `tab/`, `window/`, `session/` — browser shell: tab lifecycle, window manager, crash supervisor. **Tested.**
-- `cmd/run/` — integrated end-to-end demo. `cmd/broker/` — shell/lifecycle demo.
-- `renderer/` — (milestone 1) Rust crate: Blitz window + GDOM decoder → `DocumentMutator`.
-- `plan-blitz.md` — pinned plan, mission, ABI laws, milestones.
+- `docs/` — **ABI.md** (the wire contract), SDK.md (two-tier design),
+  DEVX-LANGUAGES.md (Go/Rust/C, humans vs agents), BENCHMARKS.md.
+- `renderer/` — the browser: Blitz window + wasmtime host + GWB ABI +
+  in-window console + system/crash logging + `--script` test driver
+  (click/type/dump golden testing without screenshots).
+- `sdk/gwb` (Go) · `sdk-rust/` · `sdk-c/gwb.h` — low-level bindings
+  (~200 lines each; byte-identical wire traffic, proven).
+- `sdk-c/gwbc.h` — **GoWebComponents shorthand for C**: components, hooks,
+  context, keyed lists, utility classes with hover — React-like authoring in
+  freestanding C, no build step beyond clang.
+- `examples/` — `hello` (console), `click` (events/anim), `todo-go|rs|c`
+  (tri-language DevX proof), `starter-c` + `task-dashboard-c` (component
+  model), `bench-c` (the benchmark guest).
+- Legacy Go spine (`protocol/`, `engine/`, `host/`, `tab/`, `window/`,
+  `session/`, `cmd/`) — the original wazero reference host of ABI v0; kept as
+  spec + tests, superseded at runtime by the renderer.
+
+## Build
+
+```powershell
+# Renderer — NOTE: builds against path-deps on C:\src\blitz, branch gwb-perf
+# (local Blitz checkout carrying our performance patches).
+cargo build --release --manifest-path renderer/Cargo.toml
+
+# Guests
+scripts\build-c.cmd examples\starter-c\starter.c renderer\starter-c.wasm   # C
+cargo build --release --target wasm32-wasip1 --manifest-path examples/todo-rs/Cargo.toml
+$env:GOOS="wasip1"; $env:GOARCH="wasm"; go build -buildmode=c-shared -o renderer\todo-go.wasm ./examples/todo-go
+
+# Run
+cd renderer; .\target\release\renderer.exe starter-c.wasm
+# Headless-ish e2e: .\target\release\renderer.exe starter-c.wasm --script starter-test.txt
+```
 
 ## Status
 
-- [x] GDOM wire protocol + engine seam + TestDOM (tested)
-- [x] wazero WASI host + SDK + counter app — **no-JS loop works end-to-end** (`go run ./cmd/run` → Count 0→1→2→3)
-- [x] Browser shell: tab lifecycle, window manager, crash supervisor (tested)
-- [x] IPC framing + loopback transport (tested)
-- [ ] M1: `renderer/` crate — Blitz window renders hardcoded HTML (pin a Blitz rev)
-- [ ] M2: Rust GDOM decoder → `DocumentMutator`, fed over stdin frames
-- [ ] M3: `blitzengine/` implements `engine.Engine`; swap into `cmd/run`
-- [ ] M4: events back (hit-test → eventmsg) — counter increments on a real mouse click
-- [ ] M5: benchmark — same DOM-heavy workload, Go-wasm-GDOM vs JS-DOM-in-Chrome
-
-## Quick start
-
-```powershell
-go test ./...            # all packages green
-go run ./cmd/run         # integrated no-JS demo: counter increments through the full stack
-go run ./cmd/broker      # shell/lifecycle + crash-supervision demo
-```
-
-Build the counter app to wasm:
-```powershell
-$env:GOOS="wasip1"; $env:GOARCH="wasm"
-go build -buildmode=c-shared -o cmd/run/app.wasm ./examples/counter
-```
-
-Renderer (milestone 1; needs rustup + VS Build Tools C++ workload):
-```powershell
-cargo build --release --manifest-path renderer/Cargo.toml
-```
+- [x] GWB ABI v1: full DOM op set, full event surface, preventDefault,
+  observations, request_frame (vsync-paced), capability-minimal WASI
+- [x] Three language bindings, identical wire traffic (Go 2.7 MB / Rust 98 KB / C 16 KB)
+- [x] C component framework (gwbc.h): state/context/events/keyed lists/hover
+- [x] Scripted driver + DOM dumps; system log + crash black-box; golden tests
+- [x] M5 benchmarks vs Chromium + two optimization rounds (engine patches on gwb-perf)
+- [ ] Keyed reconciliation (mapKeyed is API-ready), caret preservation beyond
+  end-of-text, wasmtime module cache, workers, gwb_net capability module
