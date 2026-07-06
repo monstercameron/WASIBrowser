@@ -7,3 +7,16 @@ edition = "2024"
 anyhow = "1.0.103"
 wasmtime = "46.0.1"
 wasmtime-wasi = "46.0.1"
+
+# Blitz engine — pinned to the same release the local reference checkout
+# (C:\src\blitz @ f550417) belongs to.
+blitz-dom = "=0.3.0-alpha.6"
+blitz-html = "=0.3.0-alpha.6"
+blitz-shell = "=0.3.0-alpha.6"
+blitz-traits = "=0.3.0-alpha.6"
+anyrender_vello = "0.12"
+winit = "=0.31.0-beta.2"
+
+# tokio::io::AsyncWrite is the trait wasmtime-wasi's stdout plumbing wants.
+tokio = "1.42"
+chrono = "0.4.45"
