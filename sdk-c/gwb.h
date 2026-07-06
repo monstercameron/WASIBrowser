@@ -47,7 +47,20 @@ enum {
     /* async completions: target = request id, payload = {status u16, ok u8},
      * trailing str = response body (truncated to the event region) */
     GWB_EV_NET_RESULT = 40,
+    /* host-mediated RPC completion (docs/04-WEB-RPC.md); correlate by rpcReqId.
+     * payload = {status u16, ok u8, err_class u8, req_id u32}; str = body. */
+    GWB_EV_RPC_RESULT = 41,
 };
+
+/* RPC error classes (gwb_event.rpcErrClass when !rpcOk). See 04-WEB-RPC.md §1. */
+enum {
+    GWB_RPC_ERR_NONE = 0, GWB_RPC_ERR_TRANSPORT = 1, GWB_RPC_ERR_AUTHN = 2,
+    GWB_RPC_ERR_AUTHZ = 3, GWB_RPC_ERR_NOTFOUND = 4, GWB_RPC_ERR_BADREQ = 5,
+    GWB_RPC_ERR_SERVER = 6,
+};
+
+/* rpc_call flags (header word). */
+enum { GWB_RPC_F_CBOR = 1, GWB_RPC_F_SESSION = 2 };
 
 enum { GWB_LOG_DEBUG = 0, GWB_LOG_INFO = 1, GWB_LOG_WARN = 2, GWB_LOG_ERROR = 3 };
 
@@ -62,6 +75,7 @@ GWB_IMPORT("event_region") extern void gwb_imp_event_region(const u8 *ptr, u32 l
 GWB_IMPORT("log") extern void gwb_imp_log(u32 level, const u8 *ptr, u32 len);
 GWB_IMPORT("request_frame") extern void gwb_imp_request_frame(void);
 GWB_IMPORT("fetch") extern u32 gwb_imp_fetch(const u8 *ptr, u32 len);
+GWB_IMPORT("rpc_call") extern u32 gwb_imp_rpc_call(const u8 *ptr, u32 len);
 
 #define GWB_EXPORT(name) __attribute__((export_name(name)))
 
@@ -83,6 +97,37 @@ static void gwb_trap(const char *msg) {
  * GWB_EV_NET_RESULT event (host does the HTTP on its own event loop). */
 static u32 gwb_fetch(const char *url) {
     return gwb_imp_fetch((const u8 *)url, gwb_strlen(url));
+}
+
+/* Host-mediated RPC (docs/04-WEB-RPC.md). Calls a manifest-declared `service`
+ * capability: {iface, method, payload}. The host resolves the endpoint, signs
+ * with the app key, and returns the reply as a GWB_EV_RPC_RESULT event
+ * (correlate by rpcReqId). `flags`: GWB_RPC_F_SESSION attaches the current user
+ * session. Returns the req id, or 0 if the service is undeclared / buffer full.
+ *
+ * Request buffer: service_len u16 | iface_len u16 | method_len u16 | flags u16
+ *                 then service·iface·method (utf8) + payload bytes. */
+#ifndef GWB_RPC_BUF_SIZE
+#define GWB_RPC_BUF_SIZE 8192
+#endif
+static u8 gwb_rpc_buf[GWB_RPC_BUF_SIZE];
+static u32 gwb_rpc_call(const char *service, const char *iface,
+                        const char *method, const char *payload, u16 flags) {
+    u32 sl = gwb_strlen(service), il = gwb_strlen(iface), ml = gwb_strlen(method);
+    u32 pl = payload ? gwb_strlen(payload) : 0;
+    u32 total = 8 + sl + il + ml + pl;
+    if (total > GWB_RPC_BUF_SIZE) { gwb_trap("gwb: rpc buffer full (GWB_RPC_BUF_SIZE)"); return 0; }
+    u8 *b = gwb_rpc_buf;
+    b[0] = (u8)sl; b[1] = (u8)(sl >> 8);
+    b[2] = (u8)il; b[3] = (u8)(il >> 8);
+    b[4] = (u8)ml; b[5] = (u8)(ml >> 8);
+    b[6] = (u8)flags; b[7] = (u8)(flags >> 8);
+    u32 o = 8;
+    for (u32 i = 0; i < sl; i++) b[o++] = (u8)service[i];
+    for (u32 i = 0; i < il; i++) b[o++] = (u8)iface[i];
+    for (u32 i = 0; i < ml; i++) b[o++] = (u8)method[i];
+    for (u32 i = 0; i < pl; i++) b[o++] = (u8)payload[i];
+    return gwb_imp_rpc_call(b, o);
 }
 
 /* ---- event region ---- */
@@ -182,6 +227,9 @@ typedef struct {
     u8 pressed, dark;
     u16 netStatus; /* NET_RESULT: HTTP status (0 = transport error) */
     u8 netOk;
+    u16 rpcStatus; /* RPC_RESULT: HTTP status */
+    u8 rpcOk, rpcErrClass; /* RPC_RESULT: ok + err_class (GWB_RPC_ERR_*) */
+    u32 rpcReqId; /* RPC_RESULT: the req id returned by gwb_rpc_call */
     const char *str; /* NUL-terminated view into the event region */
     u32 str_len;
 } gwb_event;
@@ -224,6 +272,12 @@ static u32 gwb_decode_events(u32 count, gwb_event_fn handler) {
         case GWB_EV_NET_RESULT:
             e.netStatus = gwb_get16(r + 20);
             e.netOk = r[22];
+            break;
+        case GWB_EV_RPC_RESULT:
+            e.rpcStatus = gwb_get16(r + 20);
+            e.rpcOk = r[22];
+            e.rpcErrClass = r[23];
+            e.rpcReqId = gwb_get32(r + 24);
             break;
         case GWB_EV_OBSERVED_LAYOUT:
             e.x = gwb_getf32(r + 20); e.y = gwb_getf32(r + 24);

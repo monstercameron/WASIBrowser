@@ -21,6 +21,8 @@ pub const ABI_MAJOR: u32 = 1;
 
 pub mod ev {
     pub const NET_RESULT: u16 = 40;
+    /// Host-mediated RPC completion, correlated by req_id. See docs/04-WEB-RPC.md.
+    pub const RPC_RESULT: u16 = 41;
     pub const POINTER_DOWN: u16 = 1;
     pub const POINTER_UP: u16 = 2;
     pub const POINTER_MOVE: u16 = 3;
@@ -108,6 +110,27 @@ pub struct NetResult {
     pub body: String,
 }
 
+/// A manifest-declared RPC service the app may call (capability). See
+/// docs/04-WEB-RPC.md §4. The `service` name in a `rpc_call` indexes this.
+#[derive(Clone)]
+pub struct ServiceEntry {
+    pub endpoint: String,
+    pub iface: String,
+    /// ed:<server pubkey> from the manifest (verified in the handshake; the
+    /// local-dev HTTP ramp does not yet pin it — Phase 2/native transport).
+    pub server_key: String,
+}
+
+/// A completed host-mediated RPC call, shipped to the UI thread. Mirrors
+/// NetResult but carries req_id correlation + an error class (§1 of 04-WEB-RPC).
+pub struct RpcResult {
+    pub req_id: u32,
+    pub status: u16,
+    pub ok: bool,
+    pub err_class: u8,
+    pub body: String,
+}
+
 pub struct Shared {
     pub atoms: Vec<Option<AtomEntry>>,
     pub batches: Vec<Vec<Op>>,
@@ -117,6 +140,13 @@ pub struct Shared {
     pub frame_requested: bool,
     /// Set once the window exists; lets request_frame wake the event loop.
     pub window_id: Option<winit::window::WindowId>,
+    /// service name -> capability (from the app manifest, §4). rpc_call resolves
+    /// its `service` field here; an unknown name is a capability violation.
+    pub services: HashMap<String, ServiceEntry>,
+    pub next_rpc_id: u32,
+    /// Current user session token (set by an auth.login RPC result; attached to
+    /// calls whose flags request it). Phase 2.
+    pub session_token: Option<String>,
 }
 
 /// Well-known atoms 0..1024 (spec appendix; mirrored in sdk/gwb).
@@ -452,6 +482,17 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         return Ok(None);
     }
 
+    // Phase 1 dev seed: a single "echo" service at the local dev server, so the
+    // RPC transport is testable before the manifest resolver (Phase 3) exists.
+    // Phase 3 replaces this with services parsed from the app manifest.
+    let mut services = HashMap::new();
+    let dev_endpoint = std::env::var("GWB_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
+    services.insert(
+        "echo".to_string(),
+        ServiceEntry { endpoint: dev_endpoint.clone(), iface: "gwb.echo.v1".to_string(), server_key: String::new() },
+    );
+
     let shared = Arc::new(Mutex::new(Shared {
         atoms: well_known_atoms(),
         batches: Vec::new(),
@@ -459,6 +500,9 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         next_fetch_id: 0,
         frame_requested: false,
         window_id: None,
+        services,
+        next_rpc_id: 0,
+        session_token: None,
     }));
 
     let mut linker: Linker<HostState> = Linker::new(&engine);
@@ -586,6 +630,121 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         },
     )?;
 
+    // Host-mediated RPC (docs/04-WEB-RPC.md). Mirrors `fetch`: parse the request
+    // buffer, resolve the manifest-declared service (capability check), POST to
+    // its endpoint on a host thread, and return the result as an RPC_RESULT
+    // event correlated by req_id. The guest never sees a socket.
+    linker.func_wrap(
+        "gwb",
+        "rpc_call",
+        |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| -> u32 {
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                return 0;
+            };
+            let data = mem.data(&caller);
+            let (p, l) = (ptr as usize, len as usize);
+            if p + l > data.len() || l < 8 {
+                return 0;
+            }
+            let buf = &data[p..p + l];
+            let u16_at = |o: usize| u16::from_le_bytes([buf[o], buf[o + 1]]) as usize;
+            let service_len = u16_at(0);
+            let iface_len = u16_at(2);
+            let method_len = u16_at(4);
+            let flags = u16_at(6);
+            let head = 8;
+            if head + service_len + iface_len + method_len > l {
+                return 0;
+            }
+            let service = String::from_utf8_lossy(&buf[head..head + service_len]).into_owned();
+            let iface =
+                String::from_utf8_lossy(&buf[head + service_len..head + service_len + iface_len])
+                    .into_owned();
+            let mstart = head + service_len + iface_len;
+            let method =
+                String::from_utf8_lossy(&buf[mstart..mstart + method_len]).into_owned();
+            let payload = buf[mstart + method_len..].to_vec();
+            let want_session = flags & 0b10 != 0;
+
+            let (req_id, entry, session) = {
+                let mut g = caller.data().shared.lock().unwrap();
+                // Capability check: the app may call only manifest-declared
+                // services. An unknown name never reaches the network.
+                let Some(entry) = g.services.get(&service).cloned() else {
+                    crate::logger::log(
+                        "rpc",
+                        &format!("rpc_call REJECTED: undeclared service '{service}' (capability)"),
+                    );
+                    return 0;
+                };
+                g.next_rpc_id += 1;
+                let id = g.next_rpc_id;
+                let session = if want_session { g.session_token.clone() } else { None };
+                (id, entry, session)
+            };
+
+            let url = format!("{}/rpc/{}/{}", entry.endpoint.trim_end_matches('/'), iface, method);
+            crate::logger::log(
+                "rpc",
+                &format!("rpc #{req_id}: {service}.{method} -> POST {url} ({} bytes)", payload.len()),
+            );
+            let proxy = caller.data().proxy.clone();
+            std::thread::Builder::new()
+                .name(format!("rpc-{req_id}"))
+                .spawn(move || {
+                    let started = Instant::now();
+                    // Phase 1: transport only. Phase 2 adds GWB-App-Key/GWB-Sig/
+                    // GWB-Ts channel signing here (ed25519 over canonical bytes).
+                    let mut req = ureq::post(&url)
+                        .timeout(std::time::Duration::from_secs(15))
+                        .set("Content-Type", "application/json")
+                        .set("GWB-Req-Id", &req_id.to_string())
+                        .set("GWB-Iface", &iface);
+                    if let Some(tok) = &session {
+                        req = req.set("GWB-Session", tok);
+                    }
+                    let result = req.send_bytes(&payload);
+                    let (ok, status, err_class, body) = match result {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            (true, status, 0u8, resp.into_string().unwrap_or_default())
+                        }
+                        Err(ureq::Error::Status(code, resp)) => {
+                            // HTTP error → map to an err_class (§1 of 04-WEB-RPC).
+                            let ec = match code {
+                                401 => 2, // authn
+                                403 => 3, // authz
+                                404 => 4, // not found
+                                400 => 5, // bad request
+                                _ => 6,   // server error
+                            };
+                            (false, code, ec, resp.into_string().unwrap_or_default())
+                        }
+                        // Transport failure: the "backend is a zombie" signal (§3).
+                        Err(e) => (false, 0, 1u8, e.to_string()),
+                    };
+                    crate::logger::log(
+                        "rpc",
+                        &format!(
+                            "rpc #{req_id}: {} status={status} err_class={err_class} ({} bytes, {:.0?})",
+                            if ok { "OK" } else { "ERR" },
+                            body.len(),
+                            started.elapsed()
+                        ),
+                    );
+                    proxy.send_event(blitz_shell::BlitzShellEvent::Embedder(Arc::new(RpcResult {
+                        req_id,
+                        status,
+                        ok,
+                        err_class,
+                        body,
+                    })));
+                })
+                .ok();
+            req_id
+        },
+    )?;
+
     linker.func_wrap("gwb", "request_frame", |caller: Caller<'_, HostState>| {
         // Just mark the request. GwbApplication::about_to_wait pumps pending
         // frames via window.poll() + request_redraw(), so animation is paced
@@ -696,6 +855,16 @@ impl EventOut {
         EventOut::new(ev::NET_RESULT)
             .u16_at(0, status)
             .u8_at(2, ok as u8)
+            .text(body)
+    }
+
+    /// RPC_RESULT (kind 41): {status u16, ok u8, err_class u8, req_id u32} + body.
+    pub fn rpc_result(req_id: u32, status: u16, ok: bool, err_class: u8, body: String) -> Self {
+        EventOut::new(ev::RPC_RESULT)
+            .u16_at(0, status)
+            .u8_at(2, ok as u8)
+            .u8_at(3, err_class)
+            .u32_at(4, req_id)
             .text(body)
     }
 }

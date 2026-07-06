@@ -616,6 +616,35 @@ impl GwbDocument {
         }
     }
 
+    /// Deliver a completed RPC to the guest as an RPC_RESULT (kind 41) event,
+    /// correlated by req_id. Mirrors deliver_net_result (docs/04-WEB-RPC.md).
+    pub fn deliver_rpc_result(&mut self, r: &crate::abi::RpcResult) {
+        let Some(rt) = self.guest.as_mut() else { return };
+        let cap = rt.shared.lock().unwrap().event_region.1 as usize;
+        let max_body = cap.saturating_sub(64);
+        let mut body = r.body.clone();
+        if body.len() > max_body {
+            let mut cut = max_body;
+            while cut > 0 && !body.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            body.truncate(cut);
+            crate::logger::log(
+                "rpc",
+                &format!("rpc #{}: body truncated to {} bytes (event region)", r.req_id, cut),
+            );
+        }
+        let eo = crate::abi::EventOut::rpc_result(r.req_id, r.status, r.ok, r.err_class, body);
+        match rt.deliver_event(&eo, 0, 0, 0) {
+            Ok(_) => {
+                if self.apply_guest_batches() > 0 {
+                    self.dirty = true;
+                }
+            }
+            Err(e) => crate::logger::log("crash", &format!("rpc delivery failed: {e:#}")),
+        }
+    }
+
     /// Emit observed_layout records for Observe'd nodes whose geometry changed.
     /// Returns true if the guest mutated the DOM in response.
     fn check_observations(&mut self) -> bool {
@@ -1116,8 +1145,8 @@ impl ApplicationHandler for GwbApplication {
                         }
                         Err(other) => match other.downcast::<crate::script::ScriptCmd>() {
                             Ok(cmd) => self.handle_script_cmd(event_loop, &cmd),
-                            Err(other) => {
-                                if let Ok(net) = other.downcast::<crate::abi::NetResult>() {
+                            Err(other) => match other.downcast::<crate::abi::NetResult>() {
+                                Ok(net) => {
                                     for window in self.inner.windows.values_mut() {
                                         let doc = window.downcast_doc_mut::<GwbDocument>();
                                         doc.deliver_net_result(&net);
@@ -1125,7 +1154,17 @@ impl ApplicationHandler for GwbApplication {
                                         window.request_redraw();
                                     }
                                 }
-                            }
+                                Err(other) => {
+                                    if let Ok(rpc) = other.downcast::<crate::abi::RpcResult>() {
+                                        for window in self.inner.windows.values_mut() {
+                                            let doc = window.downcast_doc_mut::<GwbDocument>();
+                                            doc.deliver_rpc_result(&rpc);
+                                            window.poll();
+                                            window.request_redraw();
+                                        }
+                                    }
+                                }
+                            },
                         },
                     }
                 }

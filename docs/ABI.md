@@ -75,6 +75,8 @@ The pipeline is specified, not best-effort:
 | `event_region` | `(ptr: u32, len: u32)` | Register the buffer event batches are written into. Min 4 KiB. Re-registration allowed; takes effect next delivery. |
 | `log` | `(level: u32, ptr: u32, len: u32)` | Structured console line (0=debug 1=info 2=warn 3=error) → in-window console + system log. |
 | `request_frame` | `()` | One-shot: schedule `gwb_frame` at the next paint. The rAF equivalent. |
+| `fetch` | `(ptr: u32, len: u32) -> u32` | Async HTTP GET (url at ptr..len). Returns a fetch id; completion arrives as a `NET_RESULT` (kind 40) event. Host owns the socket. |
+| `rpc_call` | `(ptr: u32, len: u32) -> u32` | Async host-mediated RPC. Request buffer = `service_len u16 \| iface_len u16 \| method_len u16 \| flags u16` then `service·iface·method` (UTF-8) + payload bytes. `service` is a manifest-declared capability name (host resolves endpoint + signs with the app key), NOT a URL. Returns a `req_id`; completion arrives as an `RPC_RESULT` (kind 41) event correlated by `req_id`. Undeclared service → rejected pre-network. See `04-WEB-RPC.md`. |
 
 ## Guest exports
 
@@ -174,7 +176,9 @@ payload [16 bytes, kind-specific] | str_len u32 (0 if none) | str bytes, pad 4
 - Payloads: pointer `{x f32, y f32, buttons u16, mods u16, detail u16}` · wheel
   `{dx f32, dy f32, mods u16}` · key `{code u16, mods u16, state u8}` · text-input /
   input / change: new value in trailing string · resize `{w f32, h f32, scale f32}` ·
-  theme `{dark u32}`.
+  theme `{dark u32}` · net_result (kind 40) `{status u16, ok u8}` + body string ·
+  rpc_result (kind 41) `{status u16, ok u8, err_class u8, req_id u32}` + body string
+  (`target`/`listener` unused; correlate by `req_id`, see `04-WEB-RPC.md`).
 - v1 kinds: `pointer_down/up/move/cancel`, `click`, `dblclick`, `context_menu`,
   `pointer_enter/leave`, `wheel`, `key_down/up`, `text_input`, `input`, `change`,
   `submit`, `focus`, `blur`, `scroll`, `window_resize`, `theme_change`,
