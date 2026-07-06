@@ -2021,3 +2021,119 @@ PublisherManifest, ServiceManifest, InterfaceSchema, CapabilityManifest,
 NameClaim, DelegationRecord, DefaultsManifest, ValueOffer, ValueReceipt,
 RecoveryRecord, UpdateDiff. Once these exist, drift stops and implementation
 becomes concrete. (Field-level shapes indexed in §15; normative CDDL is P0.)
+
+## 21. Adopters, ergonomics, and UX acceptance (the not-yet-formalized wedge)
+
+The remaining refinement items — adopter personas, developer ergonomics, the
+trust-chip render states, quantified UX gates, privacy tests — with a few
+places the plan does *better* than the proposal (marked **▲BEAT**).
+
+### 21.1 Three adopter personas, each with a 5-minute success path
+
+- **A · internal-tools dev** — private offline dashboard, safe updates, RPC.
+  `web keygen · web new dashboard · web pack . · web open web://b3:… · web
+  publish · (manifest declares rpc: todos)`. *Why they say yes:* no JS, no
+  server for a static app, offline relaunch, signed updates, scoped RPC.
+- **B · static-site publisher** — permanence for an existing site.
+  `web shim ./dist · web open web://b3:… · [pull the cable] · it still opens`.
+  Static shims cleanly (full function + permanence + offline); an SPA shims
+  only its static shell (§0c) — stated, not blurred.
+- **C · indie app dev** — a small paid, offline app.
+  `web keygen · web new notes · web pack · web publish · web open
+  web://notes~word-keytag`. **▲BEAT the proposal's `web value add payment`:**
+  payment is **not a CLI mutation** — it's a `value_exchange` capability the
+  *manifest* declares (§11.2/§13), so the honest path is "declare payments in
+  manifest.toml, `web pack` picks it up," keeping one capability model instead
+  of a side-channel verb that would contradict the capability discipline.
+
+These paths are the *center* of the onboarding story (§0c), not side notes,
+and each maps to a phase acceptance contract (§19).
+
+### 21.2 Developer ergonomics (its own axis) — proven, not sketched
+
+**▲BEAT the proposal's invented 3-language snippets: the same app already
+exists, byte-identical, in three languages, and shipped.** WASIBrowser's
+`examples/todo-go | todo-rs | todo-c` render the *same* UI via `sdk/gwb` (Go),
+`sdk-rust`, and `sdk-c/gwb.h` — with **byte-identical wire traffic** proven on
+the DOM ABI (sizes Go 2.7 MB / Rust 98 KB / C 16 KB), and `gwbc.h` gives C a
+React-shaped component model. So "any language, first-class" is not a promise
+to sketch — it's a demonstrated result (scorecard language-freedom 9, tagged
+[P]roven). The ergonomics axis rests on real code, which is stronger than any
+prettified snippet.
+
+**Mandatory devtools (P2.5 release-blocking, §19):** source-mapped wasm stack
+traces · DOM-ABI frame inspector · RPC-call inspector · permission-gate log ·
+update-diff (U-ladder) viewer · chunk-cache viewer · WVEP-session viewer. Note
+the structural edge: fuel/epoch-metered deterministic execution is *more*
+debuggable than JS's flaky async — devtools here can exceed the web's, not
+just match it.
+
+### 21.3 Trust chips = the C-ladder, rendered (one model, not two)
+
+**▲BEAT the proposal's parallel chip scheme:** don't invent a second trust
+vocabulary — the address bar chip IS the C0–C5 certainty level (§10.3, §18)
+made visible. Raw strings are never shown; each level has a fixed, distinct
+render so identity *state* is legible at a glance:
+
+```
+C0  [Exact bytes]        blue-otter-cedar…            (hash, copy-to-see-full)
+C1  [Verified publisher] SemanticPortrait · cam~blue-otter-cedar
+C2  [Pinned identity]    Maya · dusk-otter-cedar
+C3  [Your contact]       @maya  (local)
+C4  [Unverified name]    maya — choose identity        (chooser, never a dest.)
+C5  [Legacy web]         example.com — old web (DNS)   (quarantined)
+```
+
+Bare names (C4) are rendered *visibly unlike* pinned ones — "Unverified name,
+multiple identities may exist," never a normal destination.
+
+### 21.4 First-contact ceremony (a full flow, not prose)
+
+Opening a new `name~keytag` triggers a browser-native ceremony that surfaces
+the *default-ranking signals* (§1c) as human evidence:
+
+```
+Maya · dusk-otter-cedar
+  Unknown to you.
+  This key has claimed "maya" for 2 years.   (log-quorum age)
+  Pinned by 14 of your imported contacts.     (petname-import frequency)
+  No revocation history.                      (revocation-clean)
+  [Save as Maya]   [Open once]   [Cancel]
+```
+Save → `@maya` resolves locally forever (until changed). The signals shown are
+exactly the ranking inputs, so the ceremony is *auditable*, not vibes.
+
+### 21.5 The P0 UX gate — pass criteria (▲BEAT: attack-success, not just discrimination)
+
+The proposal's "80% distinguish pinned vs unpinned" is the wrong primary
+metric — a security test's bar is the **attack-success ceiling**, not average
+discrimination. So P0 passes only if:
+
+```
+- impersonation ATTACK-SUCCESS rate ≤ 5%   (users tricked into trusting a
+  fake "maya"/"bank") — the number that actually matters, kept low, not "80% ok"
+- ≥ 90% correctly treat a bare name as a search, not a destination
+- name~keytag verbal-share transcription error rate ≤ 10%
+- ≥ 90% understand @petname is local-only, non-shareable
+- the chrome beats the naive domain+lock-icon control on all of the above
+```
+If it fails, the core bet is falsified — that IS the finding (§0, §8).
+
+### 21.6 Internationalization → P2.5 (concrete, not "v-next handwave")
+
+Locale-specific keytag dictionaries · script-aware confusable folding ·
+mixed-script warnings · **QR-first sharing** where word-tags are awkward for a
+script · localized first-contact UI. Gated onto P2.5 (§8) *before* any
+name-claim UI ships, so the "equitable for all" claim isn't Latin-only.
+
+### 21.7 Privacy acceptance tests (the model is only real if these pass)
+
+```
+- Can a broker correlate the same user across sites?        MUST be NO (per-site HKDF)
+- Can a gateway see an ed: manifest lookup?                 only in Fast; Private relays it
+- Can a swarm peer identify a rare-bundle fetch?            oblivious mode hides it
+- Can app A read app B's identity?                          MUST be NO (app-scoped keys)
+- Can a WVEP receipt reveal a hardware fingerprint?         MUST be NO (coarse class only)
+```
+These join the §19 contracts; the privacy model (§5, §11.8) is not "done"
+until each is demonstrated.
