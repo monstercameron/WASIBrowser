@@ -1,4 +1,4 @@
-# window chrome: toolbar view options (hide/show/clear console)
+# window chrome: toolbar view options (hide/show/clear console, dark mode)
 wait 500
 click #tb-console
 wait 300
@@ -6,4 +6,10 @@ click #tb-console
 wait 300
 click #tb-clear
 wait 300
+click #tb-theme
+wait 300
+dump logs/chrome-dark.txt
+click #tb-theme
+wait 300
+dump logs/chrome-light.txt
 quit

@@ -38,6 +38,8 @@
  *   onPointer*(+ onMouseEnter/Leave, onHover pair)/onWheel/onScroll  events
  *   onLoad/onWindowResize/onThemeChange       window-level (root-subscribed)
  *   id("...") type/value/placeholder(...)   attributes
+ *   cls("name other") + appCss(block)       raw CSS lane: @keyframes,
+ *     descendant selectors, gradients — what utility tokens can't express
  *
  * Rules of thumb: inside the returned tree use If/Show/Range/map; outside it,
  * write plain C. Props are additive by construction (splats), so "merging"
@@ -111,7 +113,7 @@ typedef struct { i32 idx; } Node;
  * Node/Children field (omitted in a Props literal) renders as nothing. */
 typedef Node Children;
 
-enum { K_EMPTY, K_ELEM, K_TEXT, K_STYLE, K_ATTR, K_HANDLER, K_GROUP, K_UTIL, K_KEY };
+enum { K_EMPTY, K_ELEM, K_TEXT, K_STYLE, K_ATTR, K_HANDLER, K_GROUP, K_UTIL, K_KEY, K_CLASS };
 
 typedef struct {
     u8 kind;
@@ -160,6 +162,14 @@ static Node gwbc_pass(Node n) { return n; }
 static Node gc_style(u32 prop, const char *v) {
     Node n = gc_alloc(K_STYLE);
     gc_nodes[n.idx].a = prop; gc_nodes[n.idx].s = v;
+    return n;
+}
+
+/* Literal class name(s) — pairs with appCss() rules. Space-separate to
+ * attach several:  div(cls("lift anim-in"), ...) */
+static Node cls(const char *names) {
+    Node n = gc_alloc(K_CLASS);
+    gc_nodes[n.idx].s = names;
     return n;
 }
 static Node gc_attr(u32 attr, const char *v) {
@@ -770,11 +780,25 @@ static u32 gc_style_text_node; /* text node inside the generated <style> */
  * gwbc-tw.h's Preflight). Scope selectors to #mount. */
 static const char *gc_base_css;
 
+/* App CSS: a raw stylesheet block for what utility tokens can't express —
+ * @keyframes, descendant selectors, gradients. Emitted after the base css,
+ * before the .uN rules. Pair selectors with cls("name") and keep them scoped
+ * under #mount. Call every render; it only dirties on change. */
+static const char *gc_app_css;
+static void appCss(const char *css) {
+    if (gc_app_css != css) {
+        gc_app_css = css;
+        gc_css_dirty = 1;
+    }
+}
+
 static void gc_emit_stylesheet(void) {
     static char css[24 * 1024];
     u32 len = 0;
-    if (gc_base_css) {
-        const char *s = gc_base_css;
+    const char *blocks[2] = { gc_base_css, gc_app_css };
+    for (u32 b = 0; b < 2; b++) {
+        const char *s = blocks[b];
+        if (!s) continue;
         while (*s) {
             if (len + 2 >= sizeof(css)) gwbc_panic("gwbc: stylesheet buffer full");
             css[len++] = *s++;
@@ -812,12 +836,18 @@ static void gc_apply(i32 idx, u32 elem, char *classbuf, u32 *classlen) {
     GwbcNode *n = &gc_nodes[idx];
     switch (n->kind) {
     case K_UTIL: {
-        u32 cls = gc_class_for(n->s, n->s2, n->variant);
+        u32 clsid = gc_class_for(n->s, n->s2, n->variant);
         char tmp[16];
         char *p = gwb_append_str(tmp, *classlen ? " u" : "u");
-        p = gwb_append_u32(p, cls);
+        p = gwb_append_u32(p, clsid);
         *p = 0;
         for (char *t = tmp; *t && *classlen < 250; t++) classbuf[(*classlen)++] = *t;
+        classbuf[*classlen] = 0;
+        break;
+    }
+    case K_CLASS: {
+        if (*classlen && *classlen < 249) classbuf[(*classlen)++] = ' ';
+        for (const char *t = n->s; *t && *classlen < 250; t++) classbuf[(*classlen)++] = *t;
         classbuf[*classlen] = 0;
         break;
     }
@@ -1345,6 +1375,7 @@ typedef struct { f32 x, y; i32 buttons, mods; } PointerEvent;
 typedef struct { const char *key; i32 mods, pressed; } KeyEvent;
 typedef struct { f32 dx, dy; i32 mods; } WheelEvent;
 typedef struct { f32 w, h, scale; } ResizeEvent;
+typedef struct { i32 dark; } ThemeEvent;
 
 #define eventPointer(name, e) \
     Handler name = gwbc_handler(#name); \
@@ -1369,6 +1400,11 @@ typedef struct { f32 w, h, scale; } ResizeEvent;
     if (gwbc_handler_active(name)) \
         for (ResizeEvent e = { gc_event_info.w, gc_event_info.h, \
                 gc_event_info.scale }, \
+             *gc__p = &e; gc__p; gc__p = 0)
+#define eventTheme(name, e) \
+    Handler name = gwbc_handler(#name); \
+    if (gwbc_handler_active(name)) \
+        for (ThemeEvent e = { gc_event_info.dark }, \
              *gc__p = &e; gc__p; gc__p = 0)
 
 /* -- context (immediate-mode: a value stack scoped by provider()) --

@@ -305,6 +305,13 @@ static Node twBorderT(i32 px) { return gc_tw_bside("border-top-width", px); }
 static Node twBorderR(i32 px) { return gc_tw_bside("border-right-width", px); }
 static Node twBorderB(i32 px) { return gc_tw_bside("border-bottom-width", px); }
 static Node twBorderL(i32 px) { return gc_tw_bside("border-left-width", px); }
+/* Per-side border color (accent bars etc.) */
+static Node twBorderLColor(TwColor c, i32 shade) {
+    return gc_tw("border-left-color", twHex(c, shade));
+}
+static Node twBorderTColor(TwColor c, i32 shade) {
+    return gc_tw("border-top-color", twHex(c, shade));
+}
 
 typedef enum {
     TwShadowNone, TwShadowSm, TwShadow, TwShadowMd, TwShadowLg, TwShadowXl, TwShadow2xl,

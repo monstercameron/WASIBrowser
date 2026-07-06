@@ -64,7 +64,8 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
             border: 1px solid #44484e; border-radius: 6px; padding: 4px 10px;
             cursor: pointer; font-family: 'Segoe UI', sans-serif; }
   .tb-btn:hover { background: #3d4147; color: #ffffff; }
-  #app { flex: 1 1 auto; min-height: 0; padding: 24px; overflow-y: auto; }
+  #app { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #mount { min-height: 100%; }
   /* No element styling inside #mount: guest apps own their look entirely. */
   #divider { flex: 0 0 auto; height: 6px; background: #26282c;
              border-top: 1px solid #3a3d41; cursor: row-resize; }
@@ -93,6 +94,7 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
       <span id="toolbar-guest">{{GUEST}}</span>
     </div>
     <div id="toolbar-actions">
+      <button id="tb-theme" class="tb-btn">dark mode</button>
       <button id="tb-clear" class="tb-btn">clear console</button>
       <button id="tb-console" class="tb-btn">hide console</button>
     </div>
@@ -122,6 +124,7 @@ struct ChromeNodes {
     divider: usize,
     tb_console: usize,
     tb_clear: usize,
+    tb_theme: usize,
 }
 
 /// A chrome interaction noticed during event dispatch; processed after the
@@ -129,6 +132,7 @@ struct ChromeNodes {
 enum ChromeAction {
     ToggleConsole,
     ClearConsole,
+    ToggleTheme,
     DividerDown,
 }
 
@@ -141,6 +145,9 @@ pub struct GwbDocument {
     partial_out: String,
     partial_err: String,
     dirty: bool,
+    /// View-option state: dark mode requested via the toolbar (delivered to
+    /// the guest as a THEME_CHANGE event; the guest owns its own look).
+    theme_dark: bool,
     /// GWB guest runtime + id maps (None in legacy console mode).
     guest: Option<crate::abi::GuestRuntime>,
     maps: crate::abi::NodeMaps,
@@ -184,6 +191,7 @@ impl GwbDocument {
             divider: sel("#divider"),
             tb_console: sel("#tb-console"),
             tb_clear: sel("#tb-clear"),
+            tb_theme: sel("#tb-theme"),
         };
         Self {
             doc,
@@ -192,6 +200,7 @@ impl GwbDocument {
             partial_out: String::new(),
             partial_err: String::new(),
             dirty: false,
+            theme_dark: false,
             guest: None,
             maps,
             last_frame: None,
@@ -215,6 +224,20 @@ impl GwbDocument {
                     self.partial_err.clear();
                     self.rebuild_log();
                     crate::logger::log("ui", "console cleared");
+                }
+                ChromeAction::ToggleTheme => {
+                    self.theme_dark = !self.theme_dark;
+                    let dark = self.theme_dark;
+                    let mut m = self.doc.mutate();
+                    m.set_inner_html(
+                        self.chrome.tb_theme,
+                        if dark { "light mode" } else { "dark mode" },
+                    );
+                    drop(m);
+                    self.dirty = true;
+                    crate::logger::log("ui", if dark { "theme -> dark" } else { "theme -> light" });
+                    // The guest owns its look: deliver the standard event.
+                    self.notify_window_event(crate::abi::EventOut::theme_change(dark));
                 }
                 ChromeAction::DividerDown => {
                     self.console_drag = true;
@@ -771,6 +794,10 @@ impl EventHandler for ShellEventHandler<'_> {
                 }
                 if chain.contains(&self.chrome.tb_clear) {
                     self.actions.push(ChromeAction::ClearConsole);
+                    return;
+                }
+                if chain.contains(&self.chrome.tb_theme) {
+                    self.actions.push(ChromeAction::ToggleTheme);
                     return;
                 }
             }

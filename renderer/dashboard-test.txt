@@ -7,9 +7,9 @@ click #add-task
 dump logs/dash-1-added.txt
 click #task-toggle-1
 dump logs/dash-2-toggled.txt
-click #cycle-filter
+click #filter-open
 dump logs/dash-3-open.txt
-click #cycle-filter
+click #filter-done
 click #clear-done
 dump logs/dash-4-cleared.txt
 # keyed-identity: two separate type commands must land in ONE surviving input
@@ -18,8 +18,8 @@ type "AB"
 type "CD"
 dump logs/dash-5-keyed-typing.txt
 # interaction events: hover highlight, Enter-to-add, priority wheel, rclick
-# (filter is on Done after the clicks above; cycle back to All to see rows)
-click #cycle-filter
+# (filter is on Done after the clicks above; back to All to see rows)
+click #filter-all
 hover #task-row-2
 dump logs/dash-6-hover.txt
 unhover #task-row-2
