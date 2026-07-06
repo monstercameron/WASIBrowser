@@ -33,9 +33,14 @@ typedef struct {
     char id[48], name[72], category[24], image[12], blurb[200];
     i32 price, stock, featured;
 } Product;
-#define MAX_PRODUCTS 48
-static Product g_prods[MAX_PRODUCTS];
-static i32 g_prodCount;
+/* Parse helpers allocate their result arrays from the per-render frame arena
+ * (gwbc frameArena()) — no fixed caps, freed wholesale each render. Each
+ * returns the element count and writes the array pointer through `out`. */
+static i32 js_arr_len(const char *arr) {
+    i32 n = 0;
+    for (const char *e = js_arr_first(arr); e; e = js_arr_next(e)) n++;
+    return n;
+}
 
 static void read_product(const char *e, Product *p) {
     js_get_str(e, "id", p->id, sizeof p->id);
@@ -47,22 +52,24 @@ static void read_product(const char *e, Product *p) {
     p->stock = js_get_int(e, "stock");
     p->featured = js_get_bool(e, "featured");
 }
-static void parse_products(const char *json) {
+static i32 parse_products(const char *json, Product **out) {
     const char *arr = js_find(json, "products");
-    g_prodCount = 0;
-    for (const char *e = js_arr_first(arr); e && g_prodCount < MAX_PRODUCTS; e = js_arr_next(e))
-        read_product(e, &g_prods[g_prodCount++]);
+    i32 n = js_arr_len(arr), i = 0;
+    Product *ps = arenaArr(frameArena(), Product, n);
+    for (const char *e = js_arr_first(arr); e && i < n; e = js_arr_next(e))
+        read_product(e, &ps[i++]);
+    *out = ps;
+    return n;
 }
 
 typedef struct { char id[48], name[72], img[12], cat[24]; i32 qty, lineTotal; } CartLine;
-static CartLine g_cart[32];
-static i32 g_cartN, g_cartSubtotal;
-static void parse_cart(const char *json) {
-    g_cartN = 0;
-    g_cartSubtotal = js_get_int(json, "subtotal");
+static i32 parse_cart(const char *json, CartLine **out, i32 *subtotal) {
+    *subtotal = js_get_int(json, "subtotal");
     const char *items = js_find(json, "items");
-    for (const char *e = js_arr_first(items); e && g_cartN < 32; e = js_arr_next(e)) {
-        CartLine *l = &g_cart[g_cartN++];
+    i32 n = js_arr_len(items), i = 0;
+    CartLine *ls = arenaArr(frameArena(), CartLine, n);
+    for (const char *e = js_arr_first(items); e && i < n; e = js_arr_next(e)) {
+        CartLine *l = &ls[i++];
         const char *prod = js_find(e, "product");
         js_get_str(prod, "id", l->id, sizeof l->id);
         js_get_str(prod, "name", l->name, sizeof l->name);
@@ -71,21 +78,25 @@ static void parse_cart(const char *json) {
         l->qty = js_get_int(e, "qty");
         l->lineTotal = js_get_int(e, "lineTotal");
     }
+    *out = ls;
+    return n;
 }
 
 typedef struct { char id[32], sub[64]; i32 subtotal; } AdminOrder;
-static AdminOrder g_ord[48];
-static i32 g_ordN, g_ordTotal;
-static void parse_orders(const char *json) {
-    g_ordN = 0; g_ordTotal = 0;
+static i32 parse_orders(const char *json, AdminOrder **out, i32 *total) {
+    *total = 0;
     const char *arr = js_find(json, "orders");
-    for (const char *e = js_arr_first(arr); e && g_ordN < 48; e = js_arr_next(e)) {
-        AdminOrder *o = &g_ord[g_ordN++];
+    i32 n = js_arr_len(arr), i = 0;
+    AdminOrder *os = arenaArr(frameArena(), AdminOrder, n);
+    for (const char *e = js_arr_first(arr); e && i < n; e = js_arr_next(e)) {
+        AdminOrder *o = &os[i++];
         js_get_str(e, "id", o->id, sizeof o->id);
         js_get_str(e, "sub", o->sub, sizeof o->sub);
         o->subtotal = js_get_int(e, "subtotal");
-        g_ordTotal += o->subtotal;
+        *total += o->subtotal;
     }
+    *out = os;
+    return n;
 }
 
 /* gwbc strf is a mini-printf (%s %d %% only) — pad the cents manually. */
@@ -274,17 +285,19 @@ component0(CatalogView) {
     const char *cat = useAtom(gCategory);
     RpcResult q = useRpc(strf("catalog:%s", cat), "catalog", "shop.catalog.v1", "list",
                          strf("{\"Category\":\"%s\"}", cat), 0);
-    if (q.ok) parse_products(q.data);
+    Product *prods = 0;
+    i32 nprods = 0;
+    if (q.ok) nprods = parse_products(q.data, &prods);
 
     static const char *CID[6] = {"all", "tops", "bottoms", "outerwear", "footwear", "accessories"};
     static const char *CLBL[6] = {"All", "Tops", "Bottoms", "Outerwear", "Footwear", "Accessories"};
 
     eventI32(pick, i)  { setAtom(gCategory, CID[i]); }
-    eventI32(open, i)  { setAtom(gProductId, g_prods[i].id); go(V_PRODUCT); }
+    eventI32(open, i)  { setAtom(gProductId, prods[i].id); go(V_PRODUCT); }
     eventI32(add, i)   {
         if (!useAtom(gLoggedIn)) go(V_LOGIN);
         else gwbc_rpc("cart", "shop.cart.v1", "add",
-                 strf("{\"ID\":\"%s\",\"Qty\":1}", g_prods[i].id), GWB_RPC_F_SESSION, onCartChanged, 0);
+                 strf("{\"ID\":\"%s\",\"Qty\":1}", prods[i].id), GWB_RPC_F_SESSION, onCartChanged, 0);
     }
 
     return div(
@@ -304,9 +317,9 @@ component0(CatalogView) {
         IfElse(q.err,
             div(cls("empty"), text("Couldn't load products (error %d).", (i32)q.errClass)),
             div(cls("grid"),
-                map(p, g_prods, g_prodCount,
+                map(p, prods, nprods,
                     div(cls("card"), id(strf("card-%s", p->id)),
-                        onClick(bindI32(open, (i32)(p - g_prods))),
+                        onClick(bindI32(open, (i32)(p - prods))),
                         div(cls(strf("tile m-%s", p->category)),
                             span(cls("mono"), text("%s", initial(p->name))),
                             span(cls("glyph"), text("%s", p->image))),
@@ -318,7 +331,7 @@ component0(CatalogView) {
                             div(cls("crow"),
                                 span(cls("price"), text("%s", price_str(p->price))),
                                 button(cls("btn accent small"), id(strf("add-%s", p->id)),
-                                    onClick(bindI32(add, (i32)(p - g_prods))),
+                                    onClick(bindI32(add, (i32)(p - prods))),
                                     "Add")))))))));
 }
 
@@ -361,28 +374,30 @@ component0(ProductView) {
 /* ---------------------------------------------------------------- cart */
 component0(CartView) {
     RpcResult q = useRpc("cart", "cart", "shop.cart.v1", "get", "{}", GWB_RPC_F_SESSION);
-    if (q.ok) parse_cart(q.data);
+    CartLine *cart = 0;
+    i32 ncart = 0, subtotal = 0;
+    if (q.ok) ncart = parse_cart(q.data, &cart, &subtotal);
 
     event(shop)      { go(V_CATALOG); }
     event(checkout)  { go(V_CHECKOUT); }
     eventI32(inc, i) { gwbc_rpc("cart","shop.cart.v1","add",
-        strf("{\"ID\":\"%s\",\"Qty\":1}", g_cart[i].id), GWB_RPC_F_SESSION, onCartChanged, 0); }
+        strf("{\"ID\":\"%s\",\"Qty\":1}", cart[i].id), GWB_RPC_F_SESSION, onCartChanged, 0); }
     eventI32(dec, i) { gwbc_rpc("cart","shop.cart.v1","setQty",
-        strf("{\"ID\":\"%s\",\"Qty\":%d}", g_cart[i].id, g_cart[i].qty - 1), GWB_RPC_F_SESSION, onCartChanged, 0); }
+        strf("{\"ID\":\"%s\",\"Qty\":%d}", cart[i].id, cart[i].qty - 1), GWB_RPC_F_SESSION, onCartChanged, 0); }
     eventI32(del, i) { gwbc_rpc("cart","shop.cart.v1","remove",
-        strf("{\"ID\":\"%s\"}", g_cart[i].id), GWB_RPC_F_SESSION, onCartChanged, 0); }
+        strf("{\"ID\":\"%s\"}", cart[i].id), GWB_RPC_F_SESSION, onCartChanged, 0); }
 
     return div(
         span(cls("back"), onClick(shop), "\xE2\x86\x90  Continue shopping"),
         h1(cls("hero"), "Your cart"),
         IfElse(q.loading, div(cls("empty"), span(cls("spin"))),
-        IfElse(g_cartN == 0,
+        IfElse(ncart == 0,
             div(cls("empty"),
                 p("Your cart is empty."),
                 button(cls("btn primary"), onClick(shop), "Browse the collection")),
             div(
                 div(cls("panel"),
-                    map(l, g_cart, g_cartN,
+                    map(l, cart, ncart,
                         div(cls("line"),
                             div(cls(strf("ico m-%s", l->cat)),
                                 span(cls("mono"), text("%s", initial(l->name)))),
@@ -390,12 +405,12 @@ component0(CartView) {
                                 div(cls("name"), text("%s", l->name)),
                                 div(cls("muted"), text("%s each", price_str(l->lineTotal / (l->qty ? l->qty : 1))))),
                             div(cls("qty"),
-                                button(onClick(bindI32(dec, (i32)(l - g_cart))), "-"),
+                                button(onClick(bindI32(dec, (i32)(l - cart))), "-"),
                                 span(cls("qnum"), text("%d", l->qty)),
-                                button(onClick(bindI32(inc, (i32)(l - g_cart))), "+")),
+                                button(onClick(bindI32(inc, (i32)(l - cart))), "+")),
                             span(cls("price"), text("%s", price_str(l->lineTotal))),
-                            span(cls("navlink"), onClick(bindI32(del, (i32)(l - g_cart))), "Remove")))),
-                div(cls("summary"), span("Subtotal"), span(cls("price"), text("%s", price_str(g_cartSubtotal)))),
+                            span(cls("navlink"), onClick(bindI32(del, (i32)(l - cart))), "Remove")))),
+                div(cls("summary"), span("Subtotal"), span(cls("price"), text("%s", price_str(subtotal)))),
                 p(cls("muted"), "Shipping & taxes calculated at checkout."),
                 button(cls("btn accent block"), id("go-checkout"), onClick(checkout),
                     "Proceed to checkout")))));
@@ -477,22 +492,24 @@ component0(ConfirmView) {
 /* ---------------------------------------------------------------- admin */
 component0(AdminView) {
     RpcResult q = useRpc("admin:orders", "admin", "shop.admin.v1", "orders", "{}", GWB_RPC_F_SESSION);
-    if (q.ok) parse_orders(q.data);
+    AdminOrder *ords = 0;
+    i32 nords = 0, total = 0;
+    if (q.ok) nords = parse_orders(q.data, &ords, &total);
     return div(
         h1(cls("hero"), "Admin - Orders"),
         IfElse(q.err && q.errClass == GWB_RPC_ERR_AUTHZ,
             div(cls("empty"), "Admin access required."),
         IfElse(q.loading, div(cls("empty"), span(cls("spin"))),
-        IfElse(g_ordN == 0, div(cls("empty"), "No orders yet."),
+        IfElse(nords == 0, div(cls("empty"), "No orders yet."),
             div(
                 div(cls("panel"),
-                    map(o, g_ord, g_ordN,
+                    map(o, ords, nords,
                         div(cls("line"),
                             div(cls("grow"),
                                 div(cls("name"), text("%s", o->id)),
                                 div(cls("muted"), text("%s", o->sub))),
                             span(cls("price"), text("%s", price_str(o->subtotal)))))),
-                div(cls("summary"), span("Gross"), span(text("%s", price_str(g_ordTotal)))))))));
+                div(cls("summary"), span("Gross"), span(text("%s", price_str(total)))))))));
 }
 
 /* ---------------------------------------------------------------- shell */

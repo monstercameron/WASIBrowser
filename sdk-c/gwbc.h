@@ -151,6 +151,42 @@ static const char *gc_strdup(const char *s, u32 len) {
 
 static Node Empty(void) { return gc_alloc(K_EMPTY); }
 
+/* ------------------------------------------------------------------ arenas
+ * Zig-style bump arenas: alloc freely, free everything at once with reset().
+ * save()/restore() carve a temporary scope (Zig's scratch-allocator pattern).
+ * Fixed backing buffer -> OOM traps loudly (never silently clamps).
+ *   Arena a = arenaMake(buf, sizeof buf);
+ *   Thing *t = arenaNew(&a, Thing);   Thing *xs = arenaArr(&a, Thing, n);
+ *   u32 m = arenaSave(&a); ...scratch...; arenaRestore(&a, m);
+ *   arenaReset(&a);   // reclaim all
+ * A framework-managed per-render scratch arena is available via frameArena();
+ * it is reset at the start of every render (like the node arena), so it is the
+ * place for throwaway parse buffers feeding map(). */
+typedef struct { u8 *buf; u32 cap, off; } Arena;
+
+static Arena arenaMake(void *buf, u32 cap) {
+    return (Arena){ (u8 *)buf, cap, 0 };
+}
+static void *arenaAlloc(Arena *a, u32 n) {
+    a->off = (a->off + 7u) & ~7u; /* 8-byte align */
+    if (a->off + n > a->cap) gwbc_panic("gwbc: arena out of memory");
+    void *p = a->buf + a->off;
+    a->off += n;
+    return p;
+}
+static void arenaReset(Arena *a) { a->off = 0; }
+static u32 arenaSave(const Arena *a) { return a->off; }
+static void arenaRestore(Arena *a, u32 mark) { a->off = mark; }
+#define arenaNew(a, T)      ((T *)arenaAlloc((a), (u32)sizeof(T)))
+#define arenaArr(a, T, n)   ((T *)arenaAlloc((a), (u32)sizeof(T) * (u32)(n)))
+
+#ifndef GWBC_FRAME_ARENA_SIZE
+#define GWBC_FRAME_ARENA_SIZE (128 * 1024)
+#endif
+static u8 gc_frame_buf[GWBC_FRAME_ARENA_SIZE];
+static Arena gc_frame = { gc_frame_buf, GWBC_FRAME_ARENA_SIZE, 0 };
+static Arena *frameArena(void) { return &gc_frame; }
+
 static Node gwbc_text(const char *s) {
     Node n = gc_alloc(K_TEXT);
     gc_nodes[n.idx].s = s;
@@ -1066,6 +1102,7 @@ static void gc_arena_reset(void) {
     gc_strpool_len = 0;
     gc_hn_count = 0;
     gc_hp_count = 0;
+    arenaReset(&gc_frame); /* per-render scratch arena (frameArena()) */
     (void)gc_alloc(K_EMPTY);
 }
 
