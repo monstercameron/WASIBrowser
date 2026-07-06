@@ -32,10 +32,12 @@ them:
 ```
 web://<authority>/<path>[?query]
 
-authority :=  b3:<blake3-hash>        immutable bundle (identity == bytes)
-           |  ed:<ed25519-pubkey>     mutable identity (signed pointer to a bundle)
-           |  name                    free FCFS log name, dot-free (§1b)
-           |  name.tld                transitional: contains dots => legacy DNS ramp
+authority :=  b3:<blake3-hash>            immutable bundle (identity == bytes)
+           |  ed:<ed25519-pubkey>         mutable identity (signed pointer)
+           |  <label>[.<label>...]        native name: a delegation path,
+                                          root-left — top label §1b, chain §1d
+           |  <label>[...]~<keytag>       any label pinned to its key (§1c)
+           |  dns:<name.tld>              explicit legacy DNS ramp
 path      :=  route WITHIN the app (the app owns it; never a server path)
 ```
 
@@ -48,9 +50,11 @@ path      :=  route WITHIN the app (the app owns it; never a server path)
   app = publishing a new signed manifest. Trust is in the key, not in any
   server. Key rotation via a signed successor record; loss of key = loss of
   name (mitigations in §7).
-- **`name.tld` — the ramp.** Resolved via DNS TXT / `.well-known` to an
-  `ed:` or `b3:` authority, so existing names onboard without asking anyone.
-  The endgame human-name layer is §1b.
+- **`dns:name.tld` — the ramp.** An explicitly-marked legacy name, resolved
+  via DNS TXT / `.well-known` to an `ed:` or `b3:` authority, so existing
+  names onboard without asking anyone. The `dns:` marker is required because
+  dots now mean *native delegation* (§1d), not DNS — legacy is the tagged
+  exception, native is the default. The endgame human-name layer is §1b–§1d.
 
 ## 1b. Human names without registrars
 
@@ -92,7 +96,8 @@ Anti-squat without money — four structural deterrents:
    `ed:` — a name is a convenience label, not existence. Losing the string
    war doesn't unpublish anyone.
 
-**What a free name looks like.** One flat, global, dot-free label:
+**What a free name looks like.** A *top* label is one flat, dot-free string
+claimed from the global pool; dotting it delegates downward (§1d):
 
 ```
 name    := [a-z0-9] [a-z0-9-]{1,61} [a-z0-9]     (2-63 chars, ascii v1)
@@ -104,12 +109,11 @@ web://cam/todos/today          if cam's manifest is a DIRECTORY (below),
                                "todos" selects the app, rest is its route
 ```
 
-- **No TLDs.** TLDs exist to shard registry databases; quorum logs don't
-  need sharding, so `.com` dies with the registrar. **Dot-free is also the
-  disambiguator**: an authority *with* dots (`example.com`) is legacy DNS,
-  resolved via the ramp; an authority *without* dots is a log name. The two
-  namespaces cannot collide syntactically, so the transition never fights
-  the endgame.
+- **No TLDs.** TLDs exist to shard registry databases; delegation (§1d)
+  shards by key instead, so `.com` dies with the registrar. A bare top
+  label (`google`) is a §1b claim; a dotted path (`google.deepmind`) is a
+  delegation chain (§1d); a `dns:`-tagged name is the legacy ramp. Native
+  and legacy cannot collide because legacy carries the explicit marker.
 - **One claim, many apps.** A name binds to one key; that key's manifest
   may be a **directory** — a signed map of sub-apps (`todos -> b3:...,
   blog -> b3:...`), selected by the first path segment. Namespacing comes
@@ -201,6 +205,70 @@ web://os/tetris           that governs how names WITHIN it are allocated
   first + an explicit chooser keeps the long tail reachable; the default
   trust-ranking is itself a kingmaker surface and must be pluggable,
   auditable, and never a single vendor's list.
+
+## 1d. Hierarchy by cryptographic delegation (not by decree)
+
+`web://us.google.deepmind.chat`, reading jurisdiction ▸ org ▸ team ▸ app, is
+the right *allocation* model for one structural reason: a delegation tree
+makes almost every name uncontended. Only *top* labels compete in the global
+pool (§1b); everything below is minted by its parent's signature. There is
+exactly one `google.deepmind` because only google's key can sign it — no
+global race, ever. Infinite `chat`s (one per org), infinite `deepmind`s (one
+per parent). Hierarchy is the most expansive namespace there is, and the
+most human-readable — a strict improvement over §1c's flat pool for anyone
+who wants a structured name.
+
+**Dots delegate; each link is signed:**
+
+```
+us . google . deepmind . chat        big-endian: root (us) on the left
+ │      │         │        └ app,  delegated by deepmind's key
+ │      │         └ team,  delegated by google's key
+ │      └ org,   VOUCHED by the us namespace (not owned — see below)
+ └ top label (§1b): non-exclusive, trust-resolved, ~keytag-anchored
+
+delegation := parent_key signs { label, child_key, revocable?, expiry }
+resolve    := walk the chain from a trust root you accept; verify every
+              signature; a broken or absent link => the name does not resolve
+```
+
+Dots are *identity* delegation (each segment is a distinct key); slashes stay
+*routes* within one identity (`google.deepmind.chat/room/42`). A leaf may
+bottom out in `~keytag` or `b3:` for a globally-unique anchor under a pretty
+path (Cam's "unique ids" level).
+
+**The country problem — the one place I push back hard.** A hierarchy
+*rooted on countries with authority to seize* is a censorship machine bolted
+to the root of every name: it hands governments an un-person button and
+discards bus-proofing (#1), privacy (#3), and the whole anti-registrar
+thesis in one move. Countries are the greediest registrars — they have
+armies. Three rules keep the readable hierarchy from becoming DNS-with-a-flag:
+
+1. **Every node has its own key and is addressable without its ancestors.**
+   `google~keytag` resolves even if `us` revokes it or `us` vanishes.
+   Ancestors *vouch*; they do not *own*. The worst an ancestor can do is stop
+   vouching — it can never orphan or seize a descendant that holds its key.
+2. **Jurisdiction labels are OPTIONAL provenance, never the trust-critical
+   root.** `us.google…` means "the `us` namespace vouches this is
+   US-jurisdiction Google" — good for legal recourse, poison for
+   censorship-resistance — so it is one *view*. The self-sovereign
+   `google.deepmind.chat` (org as its own top label) is the default; several
+   jurisdiction roots may coexist and you choose which, if any, you trust.
+3. **Revocability is per-link and declared.** Org ▸ sub-org is normally
+   revocable (Google may retire DeepMind's subname); country ▸ org is
+   *non-authoritative* by construction (un-vouch, not un-person). No link is
+   silently authoritative.
+
+**Privacy stays intact.** This tree is for *published* identity — apps,
+services, public orgs. The per-app user pseudonyms below (`HKDF`-derived,
+unlinkable) are NOT in it and never carry a jurisdiction prefix. A human who
+appears in the tree (`google.alice`) is using an opt-in *public* handle,
+distinct from the private per-app key that logs them in.
+
+Net: keep the readable `country.org.team.app` shape, drive it with signed key
+delegation instead of registrar decree, key-anchor every level so no ancestor
+is a chokepoint, and demote the country level from root-of-authority to
+optional provenance.
 
 **Identity hashing for users** (the other half of "identity"): there is no
 global user id. The browser holds a master keypair per profile; for each app
@@ -492,6 +560,16 @@ docs/
 
 ## 7. Honest risks / open questions (critique targets)
 
+0. **Country-rooted hierarchy (§1d) is the sharpest live question.** Cam
+   wants `country.org.team.app`; I made country an *optional vouching
+   overlay* over key-delegation, never a seizing root, because an
+   authoritative jurisdiction root is a censorship chokepoint that betrays
+   the whole project. Tension: legal-recourse and human-legibility *want* a
+   real jurisdiction anchor; censorship-resistance *forbids* it being
+   authoritative. My line — vouch-not-own, org self-sovereign by default —
+   may be too clever; a state simply won't accept "you can label but not
+   control." Does the provenance overlay actually get used if it has no
+   teeth, or does it collapse back to either DNS or irrelevance?
 1. **Human names (§1b/§1c).** Non-exclusive + keytag-anchored + namespaces-
    as-commons kills the parking *economy* (no exclusivity, no resale, no
    passive yield) and the scarcity that drove it — but trades a hard
