@@ -1,11 +1,16 @@
 # GoWebBrowser
 
-A Go-first, **zero-JavaScript** browser runtime. Apps are Go→WASM; the engine is a
-**forked WinCairo WebKit2** whose web process runs a native DOM agent that applies
-binary DOM patches by calling WebCore directly. No `syscall/js`, no JS transport.
+A **wasm-first** browser platform. Any language compiles to wasm and drives the page
+through a fast binary DOM ABI — **zero JavaScript anywhere**, none of the per-call /
+string-marshaling / wrapper-object overhead of the JS DOM. Go is the first guest
+language (`GOOS=wasip1`, no `syscall/js`), not the only one: the ABI is a
+language-neutral spec and `sdk/` is just its first binding.
 
-Engine: **WebKit2 / WinCairo** (open source). Built x64 first (runs emulated on the
-X2) to validate the architecture; native Windows-ARM64 port is a later phase.
+Rendering engine: **Blitz** (DioxusLabs — blitz-dom + Stylo style + Taffy layout +
+Vello/wgpu paint, no JS), run **out-of-process** behind the frozen `engine.Engine`
+seam. The engine is a yoinked commodity; **the ABI is the product.** See
+`plan-blitz.md` for the pinned plan and ABI laws (batched writes, snapshot reads,
+language-neutral spec).
 
 ## Pipeline
 
@@ -13,34 +18,36 @@ X2) to validate the architecture; native Windows-ARM64 port is a later phase.
 Go app  --GOOS=wasip1-->  app.wasm
    |  (//go:wasmimport submit_batch)
    v
-Go broker  --GDOM binary batch (protocol/)-->  WebKit2 web-process DOM agent (webkit/)
-                                                  decodes -> WebCore Document/Node/Element
-                                                  events <-- back to broker -> wasm
+Go broker  --GDOM binary frames (protocol/) over stdio/pipe-->  renderer.exe (Rust)
+                                                                  decode -> blitz-dom DocumentMutator
+                                                                  Stylo style -> Taffy layout -> Vello paint
+                                                                  winit events <- hit-test -> broker -> wasm
 ```
 
 ## Layout
 
-- `protocol/` — GDOM binary DOM-patch wire format (encoder + decoder/Visitor). **Tested.**
-- `engine/` — `engine.Engine` seam + `TestDOM` pure-Go reference engine. **Tested.**
+- `protocol/` — GDOM binary DOM-patch wire format (encoder + decoder/Visitor). Frozen seam. **Tested.**
+- `engine/` — `engine.Engine` seam + `TestDOM` pure-Go reference engine. Frozen seam. **Tested.**
 - `host/` — wazero WASI loader: `gobrowser_dom` import, mount, event pump, `Capabilities` sandbox. **Tested.**
 - `sdk/dom`, `sdk/app`, `eventmsg`, `examples/counter` — wasm-side SDK + counter app. **Tested.**
-- `webkitengine/` — `engine.Engine` over WebKit2 IPC; loopback transport tested, process transport stubbed until WinCairo is built. **Tested.**
+- `webkitengine/` — engine adapter over IPC (GWBI framing, loopback transport). **Tested.**
+  Kept as the framing donor for `blitzengine/`; renamed/reworked in milestone 3.
 - `tab/`, `window/`, `session/` — browser shell: tab lifecycle, window manager, crash supervisor. **Tested.**
-- `webkit/` — C++ WebKit2 injected-bundle DOM agent (`dom_agent.cpp`, `bundle.cpp`, `form_values.cpp`). Write-only until the WebKit tree exists.
 - `cmd/run/` — integrated end-to-end demo. `cmd/broker/` — shell/lifecycle demo.
-- `build/build-wincairo.ps1` — builds WinCairo WebKit (Release/x64). `plan.md` — full design spec.
+- `renderer/` — (milestone 1) Rust crate: Blitz window + GDOM decoder → `DocumentMutator`.
+- `plan-blitz.md` — pinned plan, mission, ABI laws, milestones.
 
 ## Status
 
 - [x] GDOM wire protocol + engine seam + TestDOM (tested)
 - [x] wazero WASI host + SDK + counter app — **no-JS loop works end-to-end** (`go run ./cmd/run` → Count 0→1→2→3)
 - [x] Browser shell: tab lifecycle, window manager, crash supervisor (tested)
-- [x] WebKit2 engine adapter (Go) + IPC framing + loopback transport (tested)
-- [x] C++ DOM agent + bundle wiring (written; uncompiled — needs WebKit tree)
-- [ ] Build WinCairo locally; compile the C++ bundle against it
-- [ ] Wire `processTransport` to MiniBrowser+bundle over named pipe
-- [ ] Swap `engine.TestDOM` → `webkitengine.Engine` in `cmd/run` (same seam)
-- [ ] Windows-ARM64 port of WinCairo (deferred)
+- [x] IPC framing + loopback transport (tested)
+- [ ] M1: `renderer/` crate — Blitz window renders hardcoded HTML (pin a Blitz rev)
+- [ ] M2: Rust GDOM decoder → `DocumentMutator`, fed over stdin frames
+- [ ] M3: `blitzengine/` implements `engine.Engine`; swap into `cmd/run`
+- [ ] M4: events back (hit-test → eventmsg) — counter increments on a real mouse click
+- [ ] M5: benchmark — same DOM-heavy workload, Go-wasm-GDOM vs JS-DOM-in-Chrome
 
 ## Quick start
 
@@ -56,7 +63,7 @@ $env:GOOS="wasip1"; $env:GOARCH="wasm"
 go build -buildmode=c-shared -o cmd/run/app.wasm ./examples/counter
 ```
 
-Build the engine (later; hours, needs VS2022 + C++ workload):
+Renderer (milestone 1; needs rustup + VS Build Tools C++ workload):
 ```powershell
-.\build\build-wincairo.ps1
+cargo build --release --manifest-path renderer/Cargo.toml
 ```
