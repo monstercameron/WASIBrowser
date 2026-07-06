@@ -129,6 +129,22 @@ fn well_known_atoms() -> Vec<Option<AtomEntry>> {
         (21, "header"), (22, "footer"), (23, "main"), (24, "nav"),
         (25, "article"), (26, "pre"), (27, "code"), (28, "strong"), (29, "em"),
         (30, "textarea"), (31, "select"), (32, "option"),
+        // elements, extension set (2026-07-06): the rest of renderable HTML.
+        // Document-level / scripting tags (html/head/meta/script/iframe/...)
+        // are deliberately absent — guests own #mount only, and no JS exists.
+        (33, "h4"), (34, "h5"), (35, "h6"), (36, "aside"), (37, "address"),
+        (38, "blockquote"), (39, "hr"), (40, "br"), (41, "figure"),
+        (42, "figcaption"), (43, "small"), (44, "mark"), (45, "kbd"),
+        (46, "samp"), (47, "var"), (48, "cite"), (49, "abbr"), (50, "q"),
+        (51, "sub"), (52, "sup"), (53, "time"), (54, "data"), (55, "b"),
+        (56, "i"), (57, "u"), (58, "s"), (59, "wbr"), (60, "dfn"),
+        (61, "del"), (62, "ins"), (63, "dl"), (64, "dt"), (65, "dd"),
+        (66, "menu"), (67, "caption"), (68, "thead"), (69, "tbody"),
+        (70, "tfoot"), (71, "colgroup"), (72, "col"), (73, "optgroup"),
+        (74, "fieldset"), (75, "legend"), (76, "datalist"), (77, "output"),
+        (78, "progress"), (79, "meter"), (80, "details"), (81, "summary"),
+        (82, "dialog"), (83, "video"), (84, "audio"), (85, "source"),
+        (86, "canvas"), (87, "picture"), (88, "track"),
         // attributes: 100..
         (100, "class"), (101, "id"), (102, "style"), (103, "href"),
         (104, "value"), (105, "type"), (106, "placeholder"), (107, "src"),

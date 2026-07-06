@@ -103,7 +103,16 @@ Names (tags, attributes, style properties) travel as `u32` atoms:
 
 - **0–1023: well-known atoms**, fixed in the spec appendix (`div`, `span`, `p`,
   `class`, `id`, `style`, `href`, `value`, `display`, `color`, …). Common DOM
-  traffic carries **zero string bytes**.
+  traffic carries **zero string bytes**. Elements occupy 1–88 and cover every
+  renderable HTML tag (1–32 the original set; 33–88 the extension set: h4–h6,
+  aside/address/blockquote/hr/br, figure/figcaption, text-level small/mark/
+  kbd/samp/var/cite/abbr/q/sub/sup/time/data/b/i/u/s/wbr/dfn/del/ins,
+  dl/dt/dd/menu, table caption/thead/tbody/tfoot/colgroup/col, forms
+  optgroup/fieldset/legend/datalist/output/progress/meter, interactive
+  details/summary/dialog, media video/audio/source/canvas/picture/track).
+  Document-level and scripting tags (html/head/meta/script/iframe/…) are
+  deliberately absent: guests own `#mount` only, and no JS exists.
+  `renderer/src/abi.rs::well_known_atoms()` is the normative table.
 - **1024+: dynamic atoms**, guest-defined once via `DefineAtom`, reused forever.
   Host table is a flat `Vec` indexed by atom — no hashing at apply time.
 

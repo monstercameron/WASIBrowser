@@ -294,6 +294,17 @@ static Node twBorder(i32 px) {
 }
 #define TwBorder gc_group2(twBorder(1), gc_tw("border-style", "solid"))
 #define TwBorderSolid gc_tw("border-style", "solid")
+/* Per-side borders (border-t/-r/-b/-l). Preflight sets border:0 solid, so a
+ * width alone is enough; color via twBorderColor. Needed e.g. to style <hr>
+ * (the preflight zeroes its native border, exactly like real Tailwind). */
+static Node gc_tw_bside(const char *prop, i32 px) {
+    char buf[8]; char *p = gc_fmt_i32(buf, px); *p++ = 'p'; *p++ = 'x'; *p = 0;
+    return gc_tw(prop, gc_strdup(buf, gwb_strlen(buf)));
+}
+static Node twBorderT(i32 px) { return gc_tw_bside("border-top-width", px); }
+static Node twBorderR(i32 px) { return gc_tw_bside("border-right-width", px); }
+static Node twBorderB(i32 px) { return gc_tw_bside("border-bottom-width", px); }
+static Node twBorderL(i32 px) { return gc_tw_bside("border-left-width", px); }
 
 typedef enum {
     TwShadowNone, TwShadowSm, TwShadow, TwShadowMd, TwShadowLg, TwShadowXl, TwShadow2xl,

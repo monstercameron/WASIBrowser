@@ -63,16 +63,19 @@ typedef struct {
     i32 warn;
 } StatPillProps;
 
+/* One <dt>/<dd> pair per stat; the parent StatsGrid provides the <dl>. */
 component(StatPill, props, StatPillProps) {
     return div(
-        class(U(RoundedXl, BorderSlate200, BgWhite, Px(4), Py(3), Flex, FlexCol, Gap(1))),
-        span(class(U(TextXs, FgSlate500)), props.label),
-        strong(
+        class(U(twRounded(TwRoundedXl), twBorder(1), twBorderColor(TwSlate, 200),
+                TwBgWhite, twPx(4), twPy(3), TwFlex, TwFlexCol, twGap(1),
+                twShadow(TwShadowSm))),
+        dt(class(U(twTextSize(TwTextXs), twTextColor(TwSlate, 500))), props.label),
+        dd(strong(
             class(U(TextLg, FontSemibold)),
             classIf(props.warn, twTextColor(TwAmber, 600)),
             classIf(!props.warn, twTextColor(TwSlate, 900)),
             Text(props.amount)
-        )
+        ))
     );
 }
 
@@ -82,12 +85,14 @@ typedef struct {
     const char *title;
     const char *subtitle;
     const char *appName;
-} HeaderProps;
+} PageHeaderProps;
 
-component(Header, props, HeaderProps) {
+component(PageHeader, props, PageHeaderProps) {
     return header(
         class(U(Flex, FlexCol, Gap(2))),
-        p(class(U(TextXs, FgSlate500)), props.appName),
+        span(class(U(twTextSize(TwTextXs), TwUppercase, TwTrackingWide,
+                     twTextColor(TwSlate, 500))),
+            props.appName),
         h1(class(U(Text4xl, FontBold, FgSlate900)), props.title),
         p(class(U(TextSm, FgSlate600)), props.subtitle)
     );
@@ -103,15 +108,24 @@ component(Page, props, PageProps) {
     ThemeValue theme = useContext(ThemeContext);
 
     return main(
-        class(U(Block, BgSlate100, FgSlate900, Px(6), Py(8))),
+        class(U(TwBlock, twBg(TwSlate, 100), twTextColor(TwSlate, 900),
+                twPx(6), twPy(8))),
         div(
             class(U(MaxW(200), MxAuto, Flex, FlexCol, Gap(5))),
-            Header(Props(HeaderProps,
+            PageHeader(Props(PageHeaderProps,
                 .title = props.title,
                 .subtitle = props.subtitle,
                 .appName = theme.appName,
             )),
-            props.children
+            props.children,
+            footer(
+                class(U(twBorderT(1), twBorderColor(TwSlate, 200), twPt(4),
+                        TwFlex, TwItemsCenter, TwJustifyBetween,
+                        twTextSize(TwTextXs), twTextColor(TwSlate, 500))),
+                small(abbr("GWB"), " - a wasm-first browser platform. Zero JavaScript."),
+                small("Guest: ", code(class(U(TwFontMono)), "dashboard.c"),
+                    " ", time("2026"))
+            )
         )
     );
 }
@@ -140,7 +154,7 @@ typedef struct {
 } StatsGridProps;
 
 component(StatsGrid, props, StatsGridProps) {
-    return div(
+    return dl(
         class(U(Grid, GridCols4, Gap(3))),
         StatPill(Props(StatPillProps, .label = "Total", .amount = props.stats.total)),
         StatPill(Props(StatPillProps, .label = "Open", .amount = props.stats.open)),
@@ -167,36 +181,47 @@ component(TaskComposer, props, TaskComposerProps) {
     return Card(Props(CardProps,
         .title = "Add task",
         .children = Children(
-            div(
-                class(U(Flex, Gap(2))),
-                input(
-                    keyed("draft-input"), /* host node survives re-renders:
-                                             focus + caret genuinely preserved */
-                    id("task-title"),
-                    type("text"),
-                    value(props.draftTitle),
-                    onInput(props.onTitleInput),
-                    placeholder("What needs doing?"),
-                    class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
+            form(
+                class(U(Flex, FlexCol, Gap(3))),
+                div(
+                    class(U(Flex, Gap(2), TwItemsEnd)),
+                    label(
+                        class(U(WFull, Flex, FlexCol, Gap(1))),
+                        span(class(U(twTextSize(TwTextXs), twTextColor(TwSlate, 500))),
+                            "Title"),
+                        input(
+                            keyed("draft-input"), /* host node survives re-renders:
+                                                     focus + caret genuinely preserved */
+                            id("task-title"),
+                            type("text"),
+                            value(props.draftTitle),
+                            onInput(props.onTitleInput),
+                            placeholder("What needs doing?"),
+                            class(U(WFull, RoundedXl, BorderSlate300, BgWhite,
+                                    Px(4), Py(3), TextSm))
+                        )
+                    ),
+                    AppButton(Props(AppButtonProps,
+                        .label = "Add",
+                        .tone = "primary",
+                        .domId = "add-task",
+                        .onPress = props.onSubmit,
+                        .isDisabled = props.draftTitle[0] == 0,
+                    ))
                 ),
-                AppButton(Props(AppButtonProps,
-                    .label = "Add",
-                    .tone = "primary",
-                    .domId = "add-task",
-                    .onPress = props.onSubmit,
-                    .isDisabled = props.draftTitle[0] == 0,
-                ))
-            ),
-            div(
-                class(U(Flex, Gap(2), ItemsCenter)),
-                span(class(U(TextSm, FgSlate600)),
-                    text("Priority: %d", props.priority)),
-                AppButton(Props(AppButtonProps,
-                    .label = "Cycle priority",
-                    .tone = "plain",
-                    .domId = "cycle-priority",
-                    .onPress = props.onPriorityCycle,
-                ))
+                div(
+                    class(U(Flex, Gap(2), ItemsCenter)),
+                    output(class(U(TextSm, FgSlate600)),
+                        text("Priority: %d", props.priority)),
+                    AppButton(Props(AppButtonProps,
+                        .label = "Cycle priority",
+                        .tone = "plain",
+                        .domId = "cycle-priority",
+                        .onPress = props.onPriorityCycle,
+                    )),
+                    small(class(U(twTextSize(TwTextXs), twTextColor(TwSlate, 400))),
+                        "scale ", kbd("1"), "-", kbd("3"))
+                )
             )
         ),
     ));
@@ -212,7 +237,7 @@ typedef struct {
 } ToolbarProps;
 
 component(Toolbar, props, ToolbarProps) {
-    return div(
+    return nav(
         class(U(Flex, Gap(2), ItemsCenter, JustifyBetween)),
         div(
             class(U(Flex, Gap(2), ItemsCenter)),
@@ -247,18 +272,18 @@ component(TaskRow, props, TaskRowProps) {
     ThemeValue theme = useContext(ThemeContext);
     const Task *task = props.task;
 
-    return div(
+    return li(
         class(U(Flex, ItemsCenter, JustifyBetween, Gap(3), RoundedXl,
                 BorderSlate200, BgWhite, Px(4), Py(3))),
         classIf(task->done, Opacity60),
         div(
             class(U(Flex, FlexCol, Gap(1))),
-            span(
-                class(U(TextSm, FontSemibold, FgSlate900)),
-                classIf(task->done, LineThrough),
-                task->title
-            ),
-            span(class(U(TextXs, FgSlate500)),
+            /* done tasks strike through via the <s> element (UA styling),
+             * not a utility class */
+            IfElse(task->done,
+                s(class(U(TextSm, FontSemibold, FgSlate900)), task->title),
+                span(class(U(TextSm, FontSemibold, FgSlate900)), task->title)),
+            small(class(U(twTextSize(TwTextXs), twTextColor(TwSlate, 500))),
                 text("Priority %d - %s theme", task->priority, theme.accentName))
         ),
         div(
@@ -299,7 +324,7 @@ component(TaskList, props, TaskListProps) {
                     IfElse(props.store->count == 0,
                         Text("No tasks yet."),
                         text("No %s tasks.", Filter_Label(props.filter)))),
-                div(
+                ul(
                     class(U(Flex, FlexCol, Gap(2))),
                     mapKeyedIf(task, props.store->items, props.store->count,
                         task->id,
@@ -363,10 +388,10 @@ component0(RemoteTodos) {
                 IfElse(q.err,
                     p(class(U(TextSm, FgAmber500)),
                         text("Fetch failed (HTTP %d): %s", (i32)q.httpStatus, q.data)),
-                    div(
+                    ol(
                         class(U(Flex, FlexCol, Gap(1))),
                         map(t, remoteTitles, remoteTitleCount,
-                            p(id("remote-row"), class(U(TextSm, FgSlate600)),
+                            li(id("remote-row"), class(U(TextSm, FgSlate600)),
                                 text("- %s", *t)))
                     ))),
             div(
@@ -380,7 +405,7 @@ component0(RemoteTodos) {
                 )),
                 /* stale-while-revalidate: old data stays; just hint */
                 If(q.fetching && !q.loading,
-                    span(class(U(TextXs, FgSlate500)), "refreshing..."))
+                    em(class(U(TextXs, FgSlate500)), "refreshing..."))
             )
         ),
     ));
@@ -402,16 +427,16 @@ component(DebugPanel, props, DebugPanelProps) {
         .title = "Debug",
         .rootExtra = propGroup(BgSlate50),
         .children = Children(
-            p(class(U(TextXs, FgSlate500)),
-                text("Render count: %d", props.renderCount)),
-            p(class(U(TextXs, FgSlate500)),
-                text("Interactions: %d", interactions)),
-            p(class(U(TextXs, FgSlate500)),
-                text("Last changed task id: %d", props.lastChangedTaskId)),
-            p(class(U(TextXs, FgSlate500)),
-                text("Filter changed from %s to %s",
+            dl(
+                class(U(Grid, GridCols2, Gap(1), TextXs, FgSlate500)),
+                dt("Render count"), dd(Text(props.renderCount)),
+                dt("Interactions"), dd(Text(interactions)),
+                dt("Last changed task id"), dd(Text(props.lastChangedTaskId)),
+                dt("Filter change"),
+                dd(text("%s -> %s",
                     Filter_Label(props.previousFilter),
                     Filter_Label(props.currentFilter)))
+            )
         ),
     ));
 }
@@ -560,8 +585,11 @@ component(DashboardApp, props, DashboardAppProps) {
                 )),
 
                 Show(stats.highPriorityOpen > 0,
-                    p(id("high-priority-warning"), class(U(TextSm, FgAmber500)),
-                        text("%d high-priority task(s) still open.", stats.highPriorityOpen))),
+                    p(id("high-priority-warning"), class(U(TextSm)),
+                        mark(class(U(twBg(TwAmber, 100), twTextColor(TwAmber, 800),
+                                     twPx(2), twPy(1), twRounded(TwRounded))),
+                            text("%d high-priority task(s) still open.",
+                                stats.highPriorityOpen)))),
 
                 RemoteTodos(),
 
