@@ -1,11 +1,73 @@
 # Web next.0 — a transport, naming, and RPC layer for WASIBrowser
-### Plan draft 1 — for critique, not yet pinned
+### Plan draft 2 — for critique, not yet pinned
 
 The app layer is done differently already (wasm-first, no JS, binary DOM ABI).
 This plan does the same to everything *below* the app: how apps are named,
 found, moved, and how they talk to services. "web3" burned the branding on
 tokens; none of this uses a coin, a chain, or consensus. Everything here is
 hashes, signatures, and caches — boring cryptography, no speculation.
+
+> **Draft-2 note.** The structure below keeps draft-1's §1–§8 numbering (an
+> active round-by-round review references it) and prepends the missing spine:
+> a **North Star** (§0) and an **invariants-vs-aspirational tiering** (§0b),
+> plus per-section maturity tags. A full renumber to a clean
+> North-Star → Invariants → Runtime → Bundle/Identity → RPC → Distribution →
+> Naming → Privacy → Governance → Phases order is deferred to draft-3
+> cleanup, once the ideas stop moving — renaming sections mid-review costs
+> more than it buys.
+
+## 0. North Star
+
+WASIBrowser is not a faster webview and not a JavaScript replacement. It is a
+different **contract** between applications, users, services, and the
+network. One sentence unifies the entire document:
+
+> **The current web made LOCATION the root of trust.
+> next.0 makes VERIFIABLE IDENTITY and CONTENT the root of trust.**
+
+`https://example.com/app` means: trust DNS, trust the CA tree, trust the
+server, trust the current deployment, trust cookies/session, and trust that
+the URL still means today what it meant yesterday. `web://b3:<hash>` means
+*these exact bytes*; `web://ed:<pubkey>` means *whatever this publisher key
+currently signs*. Everything else flows from that one shift:
+
+- Web binds app identity to **server location** → next.0 binds it to
+  **verifiable content + publisher keys**.
+- Web grants apps **ambient authority** (cookies, origins, hidden browser
+  state) → next.0 grants **explicit host-mediated capabilities**.
+- Web treats **offline as an exception** → next.0 treats **local verified
+  storage as the default**, the network as a source of missing chunks,
+  updates, and live services.
+- Web makes **names scarce property** → next.0 treats **names as social
+  hints over cryptographic identity**.
+- Web assumes the **origin server is the center** → next.0 assumes **any**
+  cache, peer, gateway, archive, or USB stick can serve the bytes, because
+  trust comes from verification, not location.
+
+The corollary that governs every user-facing surface:
+
+> **Discovery may be social, searchable, and convenient. Execution must be
+> cryptographic, verified, and capability-scoped.**
+
+A search engine, an index, a shared link, a friend's petname — all are
+*pointer sources*. They help you find; they never confer trust. The browser
+verifies what you found (`b3:` bytes, `ed:` signature) before a single
+instruction runs. That is what lets discovery stay as easy as today's web
+while execution stops inheriting today's web's trust-by-location. (Worked
+end-to-end in §9's three flows.)
+
+### The three layers (know which one you're reading)
+
+1. **Runtime layer** — the WASM-first browser/app runtime: binary DOM ABI,
+   host capabilities, storage, events, permissions, RPC host. *Mostly built
+   — see README.md / plan-blitz.md.*
+2. **Sovereign-app layer** — apps as signed, content-addressed bundles:
+   `b3:` immutable apps, `ed:` publisher identity, lifecycle, offline
+   relaunch, delta updates, local + compile cache. *This plan, phases P1–P2.*
+3. **Web-next layer** — the aspirational network: native names, delegation,
+   swarm distribution, fountain transfer, oblivious fetch, IPv6-native peer
+   services, petnames. *This plan, P3+ — designed now so early choices can't
+   foreclose it, landed later.*
 
 Design goals, priority-ordered (from Cam's brief):
 1. **High reliability / bus-proofing** — no single operator, resolver, or
@@ -21,9 +83,56 @@ Design goals, priority-ordered (from Cam's brief):
 6. **Legacy HTTP as a ramp, not a foundation** — day one everything works
    over plain HTTPS gateways; the gateway is just an untrusted cache.
 
+## 0b. Core invariants vs. aspirational surface
+
+Not every mechanism here has the same maturity, and the plan must not pretend
+it does. Four tiers — and the one rule that ties them together: **the first
+implementation may be small, but it must be architecturally faithful.** It
+may skip any accelerator or social layer; it may NOT bake in an assumption
+that forecloses one.
+
+**Tier 0 — Invariants.** True from P1, non-negotiable, load-bearing for
+correctness; everything rests on these:
+- content-addressed bundles (`b3:`) with mandatory client-side verification
+- publisher identity as keys (`ed:` signed manifests), never as servers
+- host-mediated capabilities — **no ambient authority**, ever
+- the binary DOM ABI and the binary RPC ABI (frames, not documents)
+- a local verified cache as the default execution substrate (offline-first)
+- **no cookies, no global user id** — *structural invariants, present day
+  one.* (These are Tier 0, not civilizational goals: they require us not to
+  build a thing, not the world to adopt one.)
+- **gateways are disposable** — P1 may fetch over a single HTTPS gateway,
+  but every line must behave as if that gateway is an untrusted, replaceable
+  cache. The future is encoded into the present here or nowhere.
+- **the host is the security kernel** — apps are sandboxed WASM with only
+  manifest-declared capabilities; no app draws browser chrome, receives
+  ambient authority, or escalates on update silently (§10).
+- **verification is non-bypassable** — a hash or signature mismatch is a
+  hard stop. There is no "continue anyway" button; mismatch means corruption
+  or attack (§10). Authority is cryptographic, never linguistic: a *string*
+  name never grants trust — only a hash, a key, or a pinned binding does.
+
+**Tier 1 — Distribution accelerators.** Additive, swappable, none load-
+bearing for correctness: HTTP gateways, LAN peers, DHT discovery,
+RaptorQ/fountain coding, IPv6 multicast, relay/oblivious fetch. Losing every
+one of them degrades to "fetch from a gateway," never to "broken."
+
+**Tier 2 — Human/social layer.** Designed now, requires real network effects
+to be *usable*, not shippable in isolation: petnames, native log names,
+transparency logs, delegation chains, namespace commons, country/org/team/
+app provenance.
+
+**Tier 3 — Civilizational claims.** The destination, achieved only at scale
+and adoption: no registrars, no origin monopoly, no app-store monopoly, no
+server-location-as-identity. Distinct from Tier 0 precisely because these
+need the *world* to move, where "no cookies" needs only *us* to abstain.
+
+Section headers below carry a **[Tier N]** tag so it's always clear whether
+you're reading an invariant, an accelerator, a social layer, or a horizon.
+
 ---
 
-## 1. Naming: kill the location, keep the name
+## 1. Naming: kill the location, keep the name  *(Tier 0 core + Tier 2 names)*
 
 A URL today conflates four things: *identity* (which app), *version* (which
 bytes), *location* (which server), and *route* (which screen). next.0 splits
@@ -34,12 +143,33 @@ web://<authority>/<path>[?query]
 
 authority :=  b3:<blake3-hash>            immutable bundle (identity == bytes)
            |  ed:<ed25519-pubkey>         mutable identity (signed pointer)
+           |  @<petname>                  YOUR petname book only — deterministic,
+                                          no global lookup, key-pinned (§1b)
            |  <label>[.<label>...]        native name: a delegation path,
                                           root-left — top label §1b, chain §1d
            |  <label>[...]~<keytag>       any label pinned to its key (§1c)
            |  dns:<name.tld>              explicit legacy DNS ramp
 path      :=  route WITHIN the app (the app owns it; never a server path)
 ```
+
+**The spine of the model — one ladder, absolute → social:**
+
+```
+web://b3:<hash>                these exact bytes             ABSOLUTE
+web://ed:<pubkey>              what this key signs           CRYPTOGRAPHIC
+web://cam~a7f2                 human label + crypto anchor   VERIFIABLE
+web://@maya                    your petname book, pinned     PERSONAL
+web://maya                     global soft lookup            SOCIAL
+web://google.deepmind.chat     signed delegation chain (§1d)
+web://us.google.deepmind.chat  optional jurisdiction view (§1d)
+```
+
+> Hashes are absolute. Keyed names are cryptographic. Bare names are social.
+
+Trust degrades *gracefully* down the ladder and is **never bootstrapped from
+location** — the property the whole plan exists to establish. A name is not
+property; it is a human hint attached to a key, and the key (or the hash) is
+the identity.
 
 - **`b3:` — content identity.** The authority *is* the BLAKE3 root hash of
   the bundle. Anyone — peer, CDN, USB stick — can serve it; the client
@@ -56,7 +186,7 @@ path      :=  route WITHIN the app (the app owns it; never a server path)
   dots now mean *native delegation* (§1d), not DNS — legacy is the tagged
   exception, native is the default. The endgame human-name layer is §1b–§1d.
 
-## 1b. Human names without registrars
+## 1b. Human names without registrars  *(Tier 2 — social; designed now, lands at scale)*
 
 Key scarcity is solved (2^252 Ed25519 keys — "domain capacity" is unlimited
 at the identity layer). The remaining scarce thing is *short memorable
@@ -136,7 +266,18 @@ users/communities bind their own labels to `ed:` keys (imported sets, like
 a contacts book), which covers the "names I actually type" case with zero
 global coordination at all.
 
-## 1c. Expansive & equitable: why no one parks
+**The `@` sigil = your book, deterministically.** `web://@maya` resolves
+*only* through your local petname book — no global lookup, no ambiguity, no
+chooser. First contact is explicit: you open `web://maya~d81f` (or a shared
+`ed:` link), the chrome shows `Maya · d81f — unknown to you`, and a one-tap
+"save as Maya" writes `Maya → ed:5cb92a…` with keytag `d81f` pinned. From
+then on `@maya` is a hard, personal binding. The saved keytag is the
+impersonation tripwire: if a later `maya` presents a different key, the
+chrome flags `d81f ≠ saved` rather than silently resolving. Bare global
+`web://maya` stays soft/social (§1c); `web://@maya` is yours and pinned —
+the distinction that keeps convenience and safety from fighting.
+
+## 1c. Expansive & equitable: why no one parks  *(Tier 2 — social)*
 
 An exclusive flat namespace ("the one global `cam`, earliest wins") is the
 *least* equitable design — it manufactures scarcity and rewards the fastest
@@ -206,7 +347,7 @@ web://os/tetris           that governs how names WITHIN it are allocated
   trust-ranking is itself a kingmaker surface and must be pluggable,
   auditable, and never a single vendor's list.
 
-## 1d. Hierarchy by cryptographic delegation (not by decree)
+## 1d. Hierarchy by cryptographic delegation (not by decree)  *(Tier 2 — social)*
 
 `web://us.google.deepmind.chat`, reading jurisdiction ▸ org ▸ team ▸ app, is
 the right *allocation* model for one structural reason: a delegation tree
@@ -242,7 +383,13 @@ path (Cam's "unique ids" level).
 to the root of every name: it hands governments an un-person button and
 discards bus-proofing (#1), privacy (#3), and the whole anti-registrar
 thesis in one move. Countries are the greediest registrars — they have
-armies. Three rules keep the readable hierarchy from becoming DNS-with-a-flag:
+armies. The governing principle, stated flat:
+
+> **Jurisdictional hierarchy is a *view*, not a root of existence. A country
+> can vouch for an entity; it cannot cryptographically erase it.**
+
+Three rules make that principle enforceable, so the readable hierarchy never
+becomes DNS-with-a-flag:
 
 1. **Every node has its own key and is addressable without its ancestors.**
    `google~keytag` resolves even if `us` revokes it or `us` vanishes.
@@ -278,7 +425,34 @@ Apps see a stable pseudonym for *their* app and nothing linkable across apps
 the derived key (one signature); no passwords, no third-party identity
 provider, nothing to breach.
 
-## 2. Bundles: the unit of distribution
+## 1e. Discovery: how a URL-less web stays searchable  *(Tier 2 — social)*
+
+If there are no origin URLs to crawl, how does anyone *find* anything? The
+same way trust works: discovery is a separate, untrusted layer that only ever
+produces **pointers**, which the runtime then verifies (§0's principle made
+mechanical).
+
+- **What gets indexed**: `b3:` bundle roots, `ed:` publisher manifests,
+  `name` / `name~keytag` labels, delegation paths — harvested from HTTP
+  gateways, public manifest feeds, publisher submissions, and crawled
+  *signed* directories (a directory bundle is itself `b3:`-addressable, so an
+  index is auditable against its source).
+- **A search result is a pointer, not bytes.** "SemanticPortrait ·
+  cam~a7f2 · runs offline · 12 MB" is metadata over an `ed:`/`b3:` authority;
+  clicking runs the standard resolve → verify → permission → load path (§2).
+  An index may lie about *ranking* and *description*; it cannot forge
+  *identity*, because identity is the hash/key the browser re-verifies.
+- **Search is just an app + a service** (§4): `web://google.search` is a
+  signed app calling a `search.query` RPC (Flow 2, §9). There is no
+  privileged search API — anyone can publish a competing index, and the
+  browser trusts none of them with *execution*.
+
+So Google (or any engine) can index the WebNext object graph and stay
+maximally useful, while losing the one power it must never have: changing
+what the bytes *are*. **Discovery is allowed to be centralized and convenient
+precisely because it confers no trust.**
+
+## 2. Bundles: the unit of distribution  *(Tier 0 — invariant)*
 
 A bundle is an immutable, content-addressed archive:
 
@@ -300,7 +474,7 @@ db). Everything ever fetched is a seedable cache entry. Apps relaunch from
 the store with **zero network** and, with the wasmtime compile cache keyed
 by the same hash, near-zero start latency (goal #5: relaunch = mmap).
 
-## 2b. Versioning, freshness, and natural decay
+## 2b. Versioning, freshness, and natural decay  *(Tier 0 signed lifecycle + Tier 1 GC/decay)*
 
 Content addressing makes bytes immortal; that is a feature for survival and
 a bug for hygiene. The swarm must not become a hoard of every version ever
@@ -363,7 +537,7 @@ solvable, and the plan says so. What the platform does:
 Per-user live data whose operator vanished is declared out of scope: no
 protocol resurrects a dead database, and pretending otherwise is web3-brain.
 
-## 3. Distribution: swarm + fountain, gateway as training wheels
+## 3. Distribution: swarm + fountain, gateway as training wheels  *(Tier 1 accelerators; gateway ramp is Tier-0-faithful)*
 
 Three ways to get chunks, tried concurrently, all verifiable, all filling
 the same store:
@@ -427,7 +601,7 @@ or peer serves the same hashes), DHT bootstrap (multiple hardcoded +
 user-suppliable bootstrap sets; LAN discovery works with zero bootstrap),
 even *this project* (the formats are specs first, implementation second).
 
-## 4. RPC: the first-class API model (not a transport detail)
+## 4. RPC: the first-class API model (not a transport detail)  *(Tier 0 — invariant ABI)*
 
 Pages fetching URLs is the wrong shape for apps. next.0 apps speak RPC to
 **services**, and the browser host owns the transport (the guest stays
@@ -482,7 +656,7 @@ host              := wasmtime import, standard across all SDKs; the SPEC
 - **Legacy ramp**: `rpc-over-HTTPS` POST binding to a gateway, so a plain
   web server can host a service on day one.
 
-## 4b. The wire is binary — no document transport
+## 4b. The wire is binary — no document transport  *(Tier 0 — invariant)*
 
 The same thesis that produced the DOM ABI (binary frames beat text at every
 boundary; measured 29 ns/op vs the JS layer) applies below: **HTTP is a
@@ -523,7 +697,7 @@ over megabytes, not per object, and nothing above the socket is HTTP-shaped.
 Legacy compatibility costs one header block per bundle, not one per asset —
 the 100-requests-per-page waterfall dies with the page model itself.
 
-## 5. Privacy: separate the who from the what
+## 5. Privacy: separate the who from the what  *(Tier 0 wire encryption + Tier 1 oblivious mode)*
 
 Threats, in order of realism: (a) services correlating users, (b) network
 observers seeing what you fetch, (c) swarm peers logging who wants what.
@@ -607,12 +781,26 @@ docs/
    default-configured clients respect; a hostile pinner can keep anything
    forever (as on today's web — right-click-save exists). Is hint+default
    enough, or does anything here need to be harder?
-8. **Spec-first discipline**: 4 spec docs before serious code. Agreed?
+8. **High-risk name list is a governance surface (§10.2 R7).** Special-casing
+   banks/gov/health for conservative resolution is right, but *who defines the
+   category set and the attestations?* A hardcoded list is the same kingmaker
+   problem as the default trust set (risk 1). It must be pluggable + auditable
+   — but a pluggable safety list that users can disable is also a
+   footgun. Unresolved.
+9. **"Keys must become human" is existential, not cosmetic (§10.7).** DNS won
+   on human-legible names. If the chrome can't make `Maya · d81f · no new
+   permissions` feel as safe and simple as `maya.com` feels today, users
+   route around WebNext to the thing they understand, and every security
+   property above is moot. This is a UX research problem the protocol can't
+   solve alone — arguably the highest-risk item in the whole plan.
+10. **Spec-first discipline**: security model (§10) + naming + bundle + RPC
+    specs before serious code. Agreed?
 
 ## 8. Phases (each lands a demo in this repo)
 
-- **P0 — specs.** WEB-NAMING / WEB-BUNDLE / WEB-RPC drafts (WEB-SWARM
-  sketched). Exit: you've critiqued them.
+- **P0 — specs.** WEB-SECURITY (§10 — the invariant that governs all others)
+  / WEB-NAMING / WEB-BUNDLE / WEB-RPC drafts (WEB-SWARM sketched). Exit:
+  you've critiqued them.
 - **P1 — hashes over HTTP.** Chunk store + bundler CLI (`web pack`) +
   `web://b3:...` loading via a gateway (a static file server) with full
   verification + offline relaunch from the store + compile cache.
@@ -634,8 +822,216 @@ docs/
 - **P5 — oblivious mode.** Relay protocol + private fetch toggle in the
   toolbar. *Demo: gateway logs show relay ip, relay logs show no hashes.*
 
+**Every phase is small but architecturally faithful (§0b).** The first slice
+is not a toy that gets replaced; it is a small instance of the final
+philosophy, carrying the Tier-0 invariants from day one so nothing later is
+foreclosed:
+- P1 already speaks `web://b3:`, verified chunk store, offline relaunch, the
+  binary DOM ABI, and **capability declarations** — even with no DHT.
+- P2 already speaks `web://ed:`, signed update manifests, lifecycle, delta
+  fetch, update events — even with no global naming.
+- P3 already speaks host-mediated RPC, service identity, interface hashes,
+  declared capabilities, app-scoped caller identity — even with no
+  oblivious relay.
+Accelerators (Tier 1) and the social/naming layers (Tier 2) bolt on without
+touching those invariants.
+
 Sequencing rationale: P1/P2 deliver bus-proofing + data-cost wins with ZERO
 novel networking (it's files + hashes + any web server), which means the
 risky parts (DHT, fountain, relays) are additive upgrades to an
 already-useful system — the same commodity-behind-a-seam bet that worked
-for the render engine.
+for the render engine. The gateway ramp is deliberately Tier-0-faithful: P1
+uses HTTPS, but treats the gateway as a disposable untrusted cache, so the
+swarm is an upgrade, never a migration.
+
+## 9. Concrete flows (does the model survive contact with users?)
+
+Three walkthroughs at spec density — human surface reducing to protocol.
+They double as **acceptance criteria**: if the built system can't do these,
+the invariants aren't really wired. The one principle every flow enforces:
+*discovery is social/searchable/convenient; execution is
+cryptographic/verified/capability-scoped.*
+
+### Flow 1 — Google as bridge (the adoption ramp)
+
+*Human.* User searches normal `google.com` for "offline wasm journal app".
+Results interleave `https://…` legacy hits with WebNext cards
+("SemanticPortrait · verified · cam~a7f2 · runs offline · 12 MB"). User
+clicks one.
+
+*Protocol.* The card's authority is `web://ed:…` or `web://b3:…`. Google is
+a **pointer source only** — the browser ignores Google's copy of the bytes
+and runs resolve → fetch chunks → verify BLAKE3 / Ed25519 → check manifest →
+show permissions → load `app.wasm` → cache + compile-cache. Google ranks and
+describes; it cannot substitute code or impersonate the publisher. *The whole
+ramp: the world keeps its search engine, WebNext keeps trust.*
+
+### Flow 2 — Google as a native WebNext app
+
+*Human.* User opens `web://google.search` (chrome: "Google Search · 9c41 ·
+verified"); the cached app paints instantly; a query returns native objects,
+each with publisher, bundle hash, last-signed date, offline/RPC flags;
+clicking opens an app, a document viewer, or prompts for service permission.
+
+*Protocol.* `google.search` resolves as a delegation path (`google~9c41` key
+→ signed `search` sub-app, §1d); its `ed:` manifest verifies to a `b3:`
+bundle; the app's declared capability is one RPC service (`ed:<search svc>`,
+iface `b3:<schema>`, methods `search.query|suggest`). The app opens no
+sockets — it calls `gwb.rpc_call(...)`; the host checks the capability,
+derives the app-scoped user key, connects (QUIC/Noise or HTTPS ramp),
+verifies the service key, ships the frame, returns `RPC_RESULT`. Identity is
+**app-scoped, not a browser-wide cookie**: `app-scoped id → verified service
+key → typed method`, never `cookie → session → request`. Google becomes *a
+search app + a search service + an index of verifiable objects* — no longer
+the authority over the objects themselves.
+
+### Flow 3 — a friend's page (social + scoped identity)
+
+*Human.* Maya shares `web://maya~d81f`; first open shows "Maya · d81f ·
+unknown to you", the signed profile loads, user taps "save as Maya"; later
+`web://@maya` opens her latest signed page as a "known contact". A
+friends-only section prompts "share your app-scoped identity with Maya?"; on
+approve, private posts load. A stranger instead gets "request access?", which
+Maya approves later from her own profile app.
+
+*Protocol.* `@maya` → petname book → `ed:5cb92a…` (keytag `d81f` pinned) →
+fetch signed manifest (seq / stale_after) → verify sig + keytag + bundle →
+load. Private content is a **capability**: the app declares
+`posts.privateList` on Maya's profile service; the host derives
+`HKDF(user_master, maya_profile_authority)` and calls with that scoped key;
+Maya's service checks it against her friends ACL and returns posts or
+`access_required`; the access request is a signed `friends.requestAccess`
+from the same scoped key. Maya recognizes Earl on *her* page; **no other app
+can correlate that identity** — unlinkable by construction (§1). No "login
+with X", no email/password, no tracking cookie, no global social graph — the
+whole ambient-identity apparatus of the current web is simply absent.
+
+## 10. Security model: hostile network, hostile names, hostile apps  *(Tier 0 — invariant)*
+
+WebNext is **not automatically safer than DNS.** It is safer only if the
+browser enforces one rule, and the whole design lives or dies on it:
+
+> **Discovery can be messy. Execution cannot.**
+
+Everything that helps you *find* — search, the `dns:` ramp, transparency
+logs, DHT peers, namespaces, friends, relays — is **untrusted**. Only these
+confer execution or privileged trust: a verified content hash, a verified
+publisher signature, a pinned identity, an explicit user grant,
+browser-owned security UI. If a soft name ever *silently* becomes authority,
+WebNext is just DNS with extra cryptography. This section formalizes as
+**mandatory** what §1b–§1e merely designed (bare-name softness, `@`-pinning,
+discovery-is-not-trust).
+
+### 10.1 Eight claims stated up front
+
+1. Bare names are **not** authorities. 2. Search results are **not**
+authorities. 3. Gateways are **not** authorities. 4. DHT peers are **not**
+authorities. 5. Transparency logs are **not** authorities. 6. Apps receive
+**no** ambient authority. 7. The **browser host is the security kernel**.
+8. **Verified hashes and pinned keys are the only execution roots.**
+
+### 10.2 Seven enforced rules
+
+- **R1 — authority is cryptographic, not linguistic.** A string grants
+  nothing; only a hash, key, or pinned binding does.
+- **R2 — all network sources are hostile.** Gateway, peer, DHT, relay,
+  search, resolver: the browser verifies everything, trusts none.
+- **R3 — all apps are hostile until constrained.** Signed ≠ safe; popular ≠
+  safe; known publisher ≠ safe. WASM sandbox + declared capabilities are
+  non-negotiable.
+- **R4 — updates are security events.** New code = new authority = new risk.
+  Silent update is allowed *only* when permissions **and** publisher identity
+  are unchanged; a new capability or key change requires fresh consent.
+- **R5 — identity changes are never silent.** Key rotation, name rebinding,
+  service-key change, new recovery key, new delegation parent — all get
+  browser-native, user-visible handling.
+- **R6 — privacy is tiered, not promised.** *Normal* (fast verified fetch,
+  some metadata leak) / *Private* (relay/oblivious for manifests + rare
+  bundles) / *Paranoid* (no public DHT, no auto-seed, gateway+relay only).
+  No "total anonymity" claim (§5).
+- **R7 — high-risk name categories get conservative handling** (banks,
+  payments, government, health, cloud, package registries, identity
+  providers): require a pinned identity or explicit attestation, never a
+  bare-name resolve. *Caveat (my addition): the category list is itself a
+  governance surface — it must be pluggable and auditable, never one
+  vendor's hardcoded list, or it becomes the kingmaker §7 warns about.*
+
+### 10.3 The identity certainty ladder (drives chrome treatment)
+
+Distinct from §0b's maturity **Tiers** — these are **certainty levels
+C0–C4** governing how much the chrome trusts an authority. They map onto §1's
+absolute→social spine:
+
+```
+C0  b3:<hash>       exact immutable bytes         highest — no trust decision
+C1  ed:<key>        exact publisher identity      high — verify signature
+C2  name~keytag     label pinned to a key         good — key is the anchor
+C3  @petname        your own pinned binding       good after first pin
+C4  bare name       ambiguous discovery           NOT TRUSTED — search-like
+```
+
+**Bare names (C4) must never get the same chrome as pinned identities.** Not
+`Google`, but either `Google · 9c41 — verified by your saved trust set`, or a
+disambiguation: `"google": multiple identities found — choose one` with the
+newly-seen and look-alike claims flagged. Bare names are search queries, not
+destinations.
+
+### 10.4 Adversary sweep — mitigation → honest verdict
+
+| Adversary | Core mitigation | Honest verdict |
+|---|---|---|
+| Malicious gateway/CDN | every chunk hash-verified; root must match `b3:`; mismatch = hard fail, never substitution; race gateways; cache-first | **Strong** if verification is non-bypassable |
+| DNS incumbents / registrars | `b3:`/`ed:` work with no DNS; legacy is explicit `dns:`, never native authority | Technically defensible, **politically hostile**; danger = ramp re-centralizes |
+| Squatters / phishing clones | C0–C4 ladder; bare names non-authoritative; look-alike + confusable flagging; keytag pin trips impersonation | **Manageable** iff bare names never feel authoritative |
+| Malicious transparency logs | quorum across independent logs; cross-signed heads; equivocation detection; replaceable log sets; **never required for `b3:`/`ed:` access** | **OK for discovery**, dangerous if made a root |
+| Malicious search engines | results are pointers; identity metadata shown in-chrome; deep-link to `ed:`/`b3:`/`~keytag`; local history/petnames beat ranking | **Search finds, browser verifies, user grants** |
+| Malicious publishers | no raw sockets/FS/global storage/ambient identity by default; manifest-declared, user-visible perms; §10.6 chrome | **Safe only if host owns authority** |
+| Compromised publisher key | §10.5 TUF-style: offline root, threshold, rotation/revocation records, rollback protection, update delay, log inclusion | Single-key OK for personal, **too weak** for bank/OS/registry scale |
+| Malicious services | `ed:`-verified service; hashed iface; declared caps; user approval; public data as signed `b3:` objects | Protocol verifies *who answered*, **not that the answer is fair** |
+| DHT/swarm attackers | verify all chunks; never run unverified bytes; cap resources; no auto-seed of private/rare content; reputation = perf hint only; LAN/gateway fallback; oblivious for sensitive | **Good for integrity, hard for privacy/availability** under active attack |
+| Governments / censors | identity independent of DNS; replaceable gateways + DHT bootstrap; LAN/USB/offline sharing; open specs; namespaces not required for access | **More resistant than DNS web, not censorship-proof** — "have the bytes + the hash → run the app" |
+| Malware / hostile endpoint | OS keychain / TPM / Secure Enclave; encrypted profile; hardware-backed master key; perm audit log; profile lock | **Reduces damage, cannot beat full compromise** |
+| UI spoofing | §10.6 — trusted chrome is sacred | **Mandatory; without it the system collapses** |
+
+### 10.5 Publisher key management (escalation, reusing §1d delegation)
+
+Single-key `ed:` identity is fine for prototypes and personal pages. It is
+**not** enough for banks, OS vendors, package managers, or Google-scale apps.
+For those, the publisher's own key becomes a small delegation tree (the §1d
+machinery pointed inward):
+
+```
+ed:<publisher_root>   (offline, threshold-held)  delegates ->
+    release key       (signs day-to-day updates)
+    recovery key set  (M-of-N social/institutional, §7)
+    service key       (signs live-data responses)
+    namespace key     (governs sub-app allocation)
+```
+
+Plus: rollback protection (monotone `seq`), update delay for widely-installed
+apps, revocation records, transparency-log inclusion of updates, and a
+browser-native warning on any unusual key change (R5).
+
+### 10.6 Trusted chrome is sacred (the browser-killer class)
+
+Apps cannot draw permission prompts, identity badges, address bars, or "verified"
+claims — **those surfaces are browser-native only.** Apps cannot draw outside
+their viewport; fullscreen keeps a persistent identity overlay; clipboard
+writes and sensitive approvals require a trusted-UI user gesture; key-change
+warnings are browser-native. This is non-negotiable: without trusted chrome,
+every other guarantee here is spoofable and the system collapses.
+
+### 10.7 Keys must become human (or DNS wins anyway)
+
+DNS won because names were human. WebNext survives only if **keys become
+emotionally legible** — the browser needs a UX language for cryptographic
+trust that ordinary people read at a glance. Not `ed25519:5cb92a99…`, but:
+
+```
+Maya · d81f                         Google Search · 9c41
+known contact since May 2026        pinned publisher · update verified
+signed profile · no new permissions calls: Google Search Service
+```
+
+This is a hard requirement, not polish: it is the single most likely place
+the whole project loses to the incumbent it is trying to replace.
