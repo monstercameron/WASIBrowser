@@ -1,20 +1,33 @@
-/* gwbc.h — C component framework on the GWB ABI ("JSX with the preprocessor").
+/* gwbc.h — GoWebComponents shorthand for C, on the GWB ABI.
  *
- * Sits on top of gwb.h (the LL binding). Gives freestanding C a React-like,
- * lowercase authoring surface (host elements lowercase, components PascalCase):
+ * Declarative element builders, prop options, child normalization,
+ * conditional nodes, mapped fragments, and event wrappers — the GWC (Go)
+ * helper model translated to freestanding C, in two layers:
+ *
+ * Layer 1 — Go-mirror helpers (capitalized, like the Go package):
+ *   Text(x) / Textf(fmt, ...) / Children(...)
+ *   If(cond, node) / IfElse(c, a, b) / Unless(cond, node)
+ *   Show(cond, node)        stays in the DOM, display:none when false
+ *   Range(n, render_fn)     fn-based lists: static Node render(i32 i)
+ *   Maybe(ptr, render_fn)   render if non-NULL
+ *   Prevent(h) / Stop(h)    handler wrappers (preventDefault/stopPropagation)
+ *   PropsOf(...)            prop grouping (additive)
+ *
+ * Layer 2 — ergonomic authoring aliases (lowercase; components PascalCase):
  *   component(Name, props, PropsType) { ... return view(...); }
- *   child(Component, { .field = v, ... })       composition with painless props
- *   app(Root, { ... })                          generates the wasm exports
- *   div/p/h1/button/input/span/...              variadic tags; bare strings become text
- *   class(Flex, Gap(3), Hover(BgSlate700))      utility tokens -> classes + stylesheet
- *   text("Count: %d", count)                    reactive text (mini printf: %s %d %%)
- *   show(cond, node) / ifelse(c, a, b)          declarative conditionals (in-tree)
- *   map_range(i, n, node) / map(it, arr, n, node) / map_keyed(...)   lists
+ *   child(Component, { .field = v, ... })  /  app(Root, { ... })
+ *   div/p/h1/button/input/span/...          variadic tags; bare strings become text
+ *   props(...) / class(...) / css(...)      grouping (pure splats, zero runtime)
+ *   text("Count: %d", count)                reactive text (mini printf: %s %d %%)
+ *   map_range(i, n, node) / map(it, arr, n, node) / map_keyed(...)   expr lists
  *   state_i32/state_bool/state_str, set(name, v), previous_i32       hooks
  *   event(name){...} / event_input(name, e){...}, on_click/on_input  handlers
- *   id("...") type/value/placeholder(...)       attributes
- * Rule of thumb: inside the returned tree use show/ifelse/map; outside it,
- * write plain C (real if statements, real loops filling buffers).
+ *   id("...") type/value/placeholder(...)   attributes
+ *
+ * Rules of thumb: inside the returned tree use If/Show/Range/map; outside it,
+ * write plain C. Props are additive by construction (splats), so "merging"
+ * is just passing more of them. Not yet ported from Go: Repeat/Join (need
+ * node cloning), FlatMap/FilterMap/Switch/Cond, Debounce/Throttle.
  *
  * Model: immediate mode + full replace. Every event re-renders the whole tree
  * (two passes: handlers run, then a clean render) and replaces the mount's
@@ -263,6 +276,7 @@ static Previous_i32 gwbc_use_previous_i32(const char *name, i32 current) {
 /* ---------------------------------------------------------------- events */
 
 static const char *gc_handler_names[64];
+static u32 gc_handler_ret[64]; /* Prevent/Stop flags returned to the host */
 static u32 gc_handler_count;
 static u32 gc_active_handler = 0xFFFFFFFF;
 static const char *gc_event_value = "";
@@ -286,6 +300,11 @@ static Node gc_on(Handler h, u16 kind) {
     gc_nodes[n.idx].a = h; gc_nodes[n.idx].ev = kind;
     return n;
 }
+
+/* GWC-style event wrappers: on_click(Prevent(save)) makes the host cancel
+ * the default action; Stop halts propagation. Composable. */
+static Handler Prevent(Handler h) { gc_handler_ret[h] |= 1; return h; }
+static Handler Stop(Handler h) { gc_handler_ret[h] |= 2; return h; }
 
 /* node-id -> handler map, rebuilt each render */
 static u32 gc_hn_node[256]; static u32 gc_hn_handler[256]; static u16 gc_hn_kind[256];
@@ -453,10 +472,11 @@ static void gwbc_render(void) {
 static u32 gc_on_event(const gwb_event *e) {
     for (u32 i = 0; i < gc_hn_count; i++) {
         if (gc_hn_node[i] == e->listener && gc_hn_kind[i] == e->kind) {
-            gc_active_handler = gc_hn_handler[i];
+            u32 h = gc_hn_handler[i];
+            gc_active_handler = h;
             gc_event_value = e->str;
             gwbc_render();
-            return 0;
+            return gc_handler_ret[h]; /* Prevent/Stop flags */
         }
     }
     return 0;
@@ -574,9 +594,31 @@ static void gwbc_boot(void) {
 #define child(Component, ...) Component(((Component##Props)__VA_ARGS__))
 #define child0(Component) Component()
 
-/* -- conditionals (inside the tree; outside the tree use plain C) -- */
-#define show(cond, node) ((cond) ? (node) : Empty())
-#define ifelse(cond, then_node, else_node) ((cond) ? (then_node) : (else_node))
+/* -- conditionals (Go-mirror capitals; C keywords own the lowercase) -- */
+#define If(cond, node) ((cond) ? (node) : Empty())
+#define IfElse(cond, then_node, else_node) ((cond) ? (then_node) : (else_node))
+#define Unless(cond, node) ((cond) ? Empty() : (node))
+/* Show keeps the node in the DOM and toggles visibility (GWC semantics);
+ * non-element nodes fall back to If behavior. */
+static Node gwbc_show(i32 cond, Node node) {
+    if (cond) return node;
+    if (gc_nodes[node.idx].kind == K_ELEM) {
+        gc_append(node, gc_u("display", "none"));
+        return node;
+    }
+    return Empty();
+}
+#define Show(cond, node) gwbc_show((i32)(cond) != 0, (node))
+#define Maybe(ptr, render_fn) ((ptr) ? (render_fn)(ptr) : Empty())
+
+/* -- fn-based lists (GWC Range; prefer over inline closures C doesn't have) -- */
+typedef Node (*RenderIndexFn)(i32 i);
+static Node gwbc_range(i32 count, RenderIndexFn render) {
+    Node f = gc_alloc(K_GROUP);
+    for (i32 i = 0; i < count; i++) gc_append(f, render(i));
+    return f;
+}
+#define Range(count, render_fn) gwbc_range((i32)(count), (render_fn))
 
 /* -- lists (statement expressions; clang/gcc) -- */
 #define map_range(var, count, node_expr) (__extension__({ \
@@ -619,10 +661,24 @@ static void gwbc_boot(void) {
     InputEvent e = { gwbc_input_value(name) }; \
     if (gwbc_handler_active(name))
 
-/* -- text + styling -- */
+/* -- text + children -- */
+static Node gwbc_text_i32(i32 v) {
+    char buf[16];
+    fmt_i32(buf, v);
+    return gwbc_text(gc_strdup(buf, gwb_strlen(buf)));
+}
+/* Text(any-ish): strings and i32 normalize to text nodes (GWC Text(any)). */
+#define Text(x) _Generic((x), \
+    char *: gwbc_text, const char *: gwbc_text, default: gwbc_text_i32)(x)
 #define text(...) Textf(__VA_ARGS__)
-#define class(...) __VA_ARGS__ /* utility tokens splat into the element's args */
+#define Children(...) frag(__VA_ARGS__)
+
+/* -- prop grouping (pure splats: additive by construction, zero runtime) -- */
+#define props(...) __VA_ARGS__
+#define PropsOf(...) __VA_ARGS__
+#define class(...) __VA_ARGS__
 #define css(...) __VA_ARGS__
+#define U(...) __VA_ARGS__ /* utility token group, class(U(Flex, Gap(2))) */
 
 /* -- attributes + handlers -- */
 #define id(v) gc_attr(GWB_ATTR_ID, v)

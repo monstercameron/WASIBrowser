@@ -1,6 +1,6 @@
-/* starter-c: React-like components in freestanding C (gwbc.h).
- * Lowercase host elements, PascalCase components, hooks, declarative
- * conditionals and lists, utility styling with hover, painless props.
+/* starter-c: GoWebComponents shorthand for C (gwbc.h).
+ * Declarative builders, prop options, hooks, conditional nodes, fn-based
+ * lists, utility styling with hover, painless composition.
  *
  * Build: scripts\build-c.cmd examples\starter-c\starter.c renderer\starter-c.wasm
  */
@@ -18,34 +18,37 @@ typedef struct {
     Handler on_increment;
 } CounterPanelProps;
 
+/* Boring C render function — the GWC-style answer to inline closures. */
+static Node render_dot(i32 i) {
+    (void)i;
+    return span(props(class(U(TextSm, FgAmber500))), "*");
+}
+
 component(CounterPanel, props, CounterPanelProps) {
-    return view(
-        div(
-            class(Flex, FlexCol, Gap(3), RoundedXl, BorderSlate200, BgWhite, Pad(5)),
+    return div(
+        props(class(U(Flex, FlexCol, Gap(3), RoundedXl, BorderSlate200, BgWhite, Pad(5)))),
 
-            p(class(TextSm, FgSlate600),
-                text("Hello, %s.", props.name)),
+        p(props(class(U(TextSm, FgSlate600))),
+            text("Hello, %s.", props.name)),
 
-            p(class(TextLg, FontSemibold, FgSlate900),
-                text("Count: %d", props.count)),
+        p(props(class(U(TextLg, FontSemibold, FgSlate900))),
+            text("Count: %d", props.count)),
 
-            p(class(TextSm, FgSlate500),
-                text("Previous count: %s", props.previous_count)),
+        p(props(class(U(TextSm, FgSlate500))),
+            text("Previous count: %s", props.previous_count)),
 
-            div(class(Flex, Gap(1)),
-                map_range(i, min_i32(props.count, 20),
-                    span(class(TextSm, FgAmber500), "*")
-                )
-            ),
+        div(props(class(U(Flex, Gap(1)))),
+            Range(min_i32(props.count, 20), render_dot)),
 
-            button(
+        button(
+            props(
                 id("increment"),
                 type("button"),
                 on_click(props.on_increment),
-                class(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm,
-                      Cursor("pointer"), Hover(BgSlate700)),
-                "Increment"
-            )
+                class(U(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm,
+                        Cursor("pointer"), Hover(BgSlate700)))
+            ),
+            "Increment"
         )
     );
 }
@@ -68,44 +71,48 @@ component(StarterApp, props, StarterAppProps) {
         fmt_i32(previous_label, previous_count.value);
     }
 
-    return view(
-        main(
-            class(Block, BgSlate100, Px(6), Py(12), FgSlate900, RoundedXl, MaxW(120)),
+    return main(
+        props(class(U(Block, BgSlate100, Px(6), Py(12), FgSlate900, RoundedXl, MaxW(120)))),
 
-            div(
-                class(Flex, FlexCol, Gap(6)),
+        div(
+            props(class(U(Flex, FlexCol, Gap(6)))),
 
-                h1(class(Text4xl, FontBold), props.title),
+            h1(props(class(U(Text4xl, FontBold))), props.title),
 
-                p(
-                    class(TextSm, FgSlate600),
-                    "A starter that uses C components, macro shorthand tags, "
-                    "utility styling, state, events, composition, and reactive text."
-                ),
+            p(
+                props(class(U(TextSm, FgSlate600))),
+                "A starter that uses C components, markup helpers, utility styling, "
+                "state, events, composition, and reactive text."
+            ),
 
-                input(
+            input(
+                props(
                     id("name-input"),
                     type("text"),
                     value(name),
                     on_input(update_name),
                     placeholder("Who is using the app?"),
-                    class(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm)
-                ),
+                    class(U(WFull, RoundedXl, BorderSlate300, BgWhite, Px(4), Py(3), TextSm))
+                )
+            ),
 
-                show(name[0] == 0,
-                    p(class(TextSm, FgAmber500),
-                        "Tip: enter a name to personalize the panel.")
-                ),
+            If(name[0] == 0,
+                p(
+                    props(class(U(TextSm, FgAmber500))),
+                    "Tip: enter a name to personalize the panel."
+                )
+            ),
 
-                child(CounterPanel, {
-                    .name = name,
-                    .count = count,
-                    .previous_count = previous_label,
-                    .on_increment = increment,
-                }),
+            child(CounterPanel, {
+                .name = name,
+                .count = count,
+                .previous_count = previous_label,
+                .on_increment = increment,
+            }),
 
-                p(class(TextXs, FgSlate500),
-                    text("Current count is %d", count))
+            p(
+                props(class(U(TextXs, FgSlate500))),
+                text("Current count is %d", count)
             )
         )
     );
