@@ -728,9 +728,21 @@ renderer/
   src/webproto/gateway.rs  HTTP(S) chunk fetch (ureq today, QUIC later)
   src/webproto/swarm.rs    DHT + peer protocol + fountain rx/tx (phase 3)
   src/rpc.rs        rpc host import + event delivery (mirrors fetch)
+  src/policy.rs     AppPolicy + per-import capability gates (§11.3) — the
+                    policy layer over Wasmtime's sandbox (§11.1)
+  src/taskmgr.rs    Store::limiter + fuel/epoch budgets -> health states,
+                    the Task Manager (§11.4)
+  src/update.rs     4-axis update diff + Auto-safe/Ask/Block + rollback (§11.6)
 docs/
-  WEB-NAMING.md  WEB-BUNDLE.md  WEB-SWARM.md  WEB-RPC.md   (specs first)
+  WEB-SECURITY.md  WEB-NAMING.md  WEB-BUNDLE.md  WEB-SWARM.md  WEB-RPC.md
+  WEB-PERMISSIONS.md (§11 capability vocab + update UX)   (specs first)
 ```
+
+The division of labor is the whole design: **Wasmtime** = memory isolation,
+WASI sandbox, preopen model, fuel/epoch, resource limits, compile cache;
+**WASIBrowser** = manifest, permission vocabulary, trusted prompts, capability
+gates, RPC policy, identity chrome, update diffing, rollback, safe mode,
+per-app privacy profiles (§11).
 
 ## 7. Honest risks / open questions (critique targets)
 
@@ -827,9 +839,13 @@ is not a toy that gets replaced; it is a small instance of the final
 philosophy, carrying the Tier-0 invariants from day one so nothing later is
 foreclosed:
 - P1 already speaks `web://b3:`, verified chunk store, offline relaunch, the
-  binary DOM ABI, and **capability declarations** — even with no DHT.
+  binary DOM ABI, **capability declarations + the §11.3 permission gate + the
+  §11.4 Task Manager + the §11.7 identity chip** — even with no DHT. (QoL is
+  not a later polish phase; the gate and chip ship with the first app that
+  loads.)
 - P2 already speaks `web://ed:`, signed update manifests, lifecycle, delta
-  fetch, update events — even with no global naming.
+  fetch, update events, **and the §11.6 4-axis update diff + rollback** —
+  even with no global naming.
 - P3 already speaks host-mediated RPC, service identity, interface hashes,
   declared capabilities, app-scoped caller identity — even with no
   oblivious relay.
@@ -1035,3 +1051,149 @@ signed profile · no new permissions calls: Google Search Service
 
 This is a hard requirement, not polish: it is the single most likely place
 the whole project loses to the incumbent it is trying to replace.
+
+## 11. Quality of life: living with a hostile-by-default runtime  *(Tier 0 host + Tier 2 polish)*
+
+§10 says *trust nothing*; §11 answers *how a user lives with that without
+drowning in scary prompts.* The bridge from "protocol runtime" to "browser
+people use daily" is three things: a browser-level permission vocabulary over
+Wasmtime's sandbox, update UX that is signed + diffed + rollbackable, and
+identity-aware chrome. This is a core pillar, not a finishing pass.
+
+### 11.1 Wasmtime is the sandbox; WASIBrowser is the policy layer
+
+Wasmtime supplies *primitives*, not a UX: memory isolation, the WASI preopen
+model (no ambient FS — access is explicit preopened handles), `Store::limiter`
+(cap memories/tables/instances), **fuel** (deterministic, metered trap/yield)
+and **epoch interruption** (cheap wall-clock interruption of untrusted code),
+and a compile cache. App authors must never think in WASI powers (`preopen
+dir`, `inherit network/env/stdio`); they think in **browser capabilities**,
+and the host maps each to a specific import + WASI config + runtime gate.
+
+> Wasmtime enforces the import boundary. WASIBrowser defines what the imports
+> *mean* and who may call them.
+
+### 11.2 The capability vocabulary (manifest-declared, browser-granted)
+
+**Storage** (app-private · user-picked file r/w · folder r/w) · **Network**
+(none · RPC-to-declared-service · declared-gateway-fetch · LAN-peer ·
+public-swarm · raw-socket ≈ never) · **Identity** (anonymous · app-scoped ·
+contact-share · org-share) · **System** (notifications · clipboard r/w ·
+camera+mic · background · device discovery) · **Execution budgets** (memory ·
+fuel/CPU · background-minutes · storage quota · network quota). No raw WASI
+term ever reaches the user surface.
+
+### 11.3 The gate — AppPolicy + per-import checks (the heart)
+
+Each instance carries `AppPolicy { authority, bundle_hash, publisher_key,
+granted_permissions, resource_limits, service_grants, storage_namespace }`;
+every host import consults it:
+
+```
+dom.create_element     default-allow
+storage.open           require app-private-storage grant
+fs.open_user_file      require user-picked-file grant (+ picker gesture)
+rpc.call               require {service key, iface, method} grant
+clipboard.read         require clipboard grant + user gesture
+notifications.show     require notification grant
+swarm.seed             require public-seeding grant
+identity.sign          require scoped-identity grant
+```
+
+Wasmtime handles memory isolation + the import boundary; this layer handles
+*meaning*. It's the security kernel of §10 R3 made concrete.
+
+### 11.4 App health = resource limits made visible (a Task Manager)
+
+`Store::limiter` + fuel + epoch aren't only safety — they're the data behind
+a browser **Task Manager**: per-app CPU / memory / network / storage + a
+health state. *Fuel* is deterministic (metered, reproducible, some overhead);
+*epoch interruption* is the cheap choice for reining in a main-loop hog — use
+epoch for "this app is spinning," fuel where determinism matters. Health
+states unify runtime **and** lifecycle (§2b): running · sleeping ·
+background-limited · network-blocked · permission-needed · throttled ·
+out-of-fuel · out-of-memory · crashed · update-available · stale · sunset.
+Row actions: pause · restart · revoke network · clear storage · pin version ·
+rollback · view permissions/publisher. **§2b's `retain`/`stale_after`/
+`sunset`/`BUNDLE_OUTDATED` stop being hidden protocol fields and become
+visible states.**
+
+### 11.5 Prompts: rare, staged, specific
+
+Launch with minimum safe capabilities; request only on the action that needs
+it (click "enable reminders" → the notification prompt, never a launch-time
+wall of asks). Every prompt is **specific**, never "do you trust this app?":
+*"…call AI Reflection Service · 81ac (publisher a7f2) to generate
+reflections? [This time] [Always] [Deny]."* Every prompt carries a **why?**
+(plain-language purpose + the technical grant/limit) to avoid Android-style
+fatigue. Manifest marks **required vs optional**; the user can **run with
+reduced permissions** ("allow required only"). *Refinement: the `required`
+flag is publisher-declared and therefore over-askable — the browser still
+runs-and-observes, and an app that declares a power "required" yet functions
+without it is a negative quality signal. The flag is a hint; reputation is the
+check.* The governing rule: **specific trust is manageable, generic trust is
+how users get owned.**
+
+### 11.6 Updates: signed, 4-axis diffed, rollbackable
+
+Every update is judged on four axes — **code** (bundle hash changed?),
+**publisher** (same trusted key/chain?), **capability** (permissions
+changed?), **data** (migration safe/reversible?) — feeding three policies
+(this is §10 R4 made operable):
+
+- **Auto-safe** — same publisher, same permissions, compatible ABI,
+  reversible/compatible migration, unflagged → silent update.
+- **Ask** — new permission/service/identity-sharing, major-version jump, key
+  rotation, or irreversible migration → paused with a *specific* diff
+  ("current: storage + notifications; new adds: background + RPC to
+  Analytics · 193b — [Update & allow] [Update, deny new] [Stay] [Notes]").
+- **Block** — invalid signature, rollback attack, revoked key, hash mismatch,
+  hidden escalation, known-malicious bundle.
+
+**Channels** (stable default / beta / nightly / pinned / enterprise /
+friend-shared / archive) ride the signed publisher model
+(`ed:` → per-channel seq → `b3:`). **Rollback** is native because bundles are
+content-addressed and `retain: N` keeps recent good versions — a crash-looping
+update auto-restores the previous good version and pauses. **Storage
+migrations** declare reversibility + backup; irreversible ones force an
+export-first prompt. The manifest carries `"permissions_may_expand": false` —
+a publisher promise that posture holds; *flipping it to `true` is itself an
+Ask-tier event, never silent.*
+
+### 11.7 The identity chip = the new lock icon
+
+A per-app trust chip in chrome (`SemanticPortrait · a7f2`) expands to
+identity (publisher, loaded-from `ed:`, bundle `b3:`, first-opened),
+permissions (granted + denied + RPC grants), and updates (channel, current,
+rollback-available). The TLS lock meant "encrypted to this domain"; the
+WebNext chip means **"these exact bytes / this exact publisher key are
+running, with these exact powers"** — strictly more useful. Trusted-chrome
+only (§10.6): the chip, the prompts, and key-change warnings are
+browser-native, never app-drawable.
+
+### 11.8 Per-app privacy profiles + safe mode
+
+Per app: **identity mode** (anonymous / app-scoped / contact / org),
+**fetch mode** (fast / private-relay / no-public-swarm — the §5 tiers), and
+**storage** (keep / clear-on-close / encrypted-only). Maya's page runs
+Maya-scoped + private-relay + keep; a random game runs anonymous + fast +
+clear-on-close — far more precise than one global incognito. **Safe mode**
+(per app): deny optional perms, disable background, network = required-RPC
+only, load the previous known-good storage snapshot, no experimental ABI
+imports — for debugging, malware suspicion, and bad updates.
+
+### 11.9 Install = open
+
+A verified bundle with a local cache is already an installed app; there is no
+website-vs-app choice to make. First open shows publisher + size + "runs
+offline after first load" + permissions and an [Open]; afterward, optional
+[Pin] / [Add shortcut]. Progressive, never a gate.
+
+### The pillar, in four lines
+
+```
+Safe        because apps are sandboxed (Wasmtime + capabilities, §10).
+Usable      because permissions are human-level, rare, staged, specific.
+Resilient   because updates are signed, cached, rollbackable, and diffed.
+Transparent because identity, powers, resources, and history are visible.
+```
