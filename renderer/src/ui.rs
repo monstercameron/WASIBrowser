@@ -53,17 +53,31 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
   html, body { height: 100%; }
   body { display: flex; flex-direction: column; background: #1e1f22; color: #e8e8e8;
          font-family: 'Segoe UI', sans-serif; }
-  #app { flex: 1 1 auto; padding: 24px; overflow-y: auto; }
-  #app h1 { font-size: 22px; margin-bottom: 8px; }
-  #app p { color: #9a9fa6; font-size: 14px; margin-bottom: 4px; }
-  #mount { margin-top: 20px; }
+  #toolbar { flex: 0 0 auto; display: flex; align-items: center;
+             justify-content: space-between; padding: 6px 12px;
+             background: #26282c; border-bottom: 1px solid #3a3d41; }
+  #toolbar-title { font-size: 13px; font-weight: 600; }
+  #toolbar-guest { font-size: 12px; color: #9a9fa6;
+                   font-family: Consolas, monospace; margin-left: 10px; }
+  #toolbar-actions { display: flex; gap: 8px; }
+  .tb-btn { font-size: 12px; color: #c9cdd3; background: #33363b;
+            border: 1px solid #44484e; border-radius: 6px; padding: 4px 10px;
+            cursor: pointer; font-family: 'Segoe UI', sans-serif; }
+  .tb-btn:hover { background: #3d4147; color: #ffffff; }
+  #app { flex: 1 1 auto; min-height: 0; padding: 24px; overflow-y: auto; }
   /* No element styling inside #mount: guest apps own their look entirely. */
-  #console { flex: 0 0 45%; display: flex; flex-direction: column;
-             border-top: 1px solid #3a3d41; background: #161719; }
-  #console-title { padding: 6px 12px; font-size: 12px; color: #9a9fa6;
-                   background: #222427; border-bottom: 1px solid #3a3d41;
+  #divider { flex: 0 0 auto; height: 6px; background: #26282c;
+             border-top: 1px solid #3a3d41; cursor: row-resize; }
+  #divider:hover { background: #4a86d4; }
+  /* Fixed height (host-adjusted by dragging #divider): the console NEVER
+     grows with message count — #console-log overflow-scrolls instead. */
+  #console { flex: 0 0 auto; height: 240px; min-height: 0; display: flex;
+             flex-direction: column; background: #161719; }
+  #console-title { flex: 0 0 auto; padding: 6px 12px; font-size: 12px;
+                   color: #9a9fa6; background: #222427;
+                   border-bottom: 1px solid #3a3d41;
                    font-family: Consolas, monospace; }
-  #console-log { flex: 1 1 auto; overflow-y: auto; display: flex;
+  #console-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex;
                  flex-direction: column-reverse; padding: 8px 12px;
                  font-family: Consolas, 'Cascadia Mono', monospace;
                  font-size: 13px; line-height: 1.5; }
@@ -73,14 +87,22 @@ const SHELL_HTML: &str = r#"<!DOCTYPE html>
   .host { color: #82aaff; }
 </style></head>
 <body>
+  <header id="toolbar">
+    <div>
+      <span id="toolbar-title">GoWebBrowser</span>
+      <span id="toolbar-guest">{{GUEST}}</span>
+    </div>
+    <div id="toolbar-actions">
+      <button id="tb-clear" class="tb-btn">clear console</button>
+      <button id="tb-console" class="tb-btn">hide console</button>
+    </div>
+  </header>
   <main id="app">
-    <h1>GoWebBrowser</h1>
-    <p>Rust renderer shell — Blitz + wasmtime, zero JavaScript.</p>
-    <p>Guest module: {{GUEST}}. Its stdout/stderr stream into the console below.</p>
     <div id="mount"></div>
   </main>
+  <div id="divider"></div>
   <footer id="console">
-    <div id="console-title">console — {{GUEST}}</div>
+    <div id="console-title">console — {{GUEST}} — drag the bar above to resize</div>
     <div id="console-log"></div>
   </footer>
 </body></html>
@@ -91,6 +113,23 @@ fn escape_html(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Host-chrome node ids, resolved once from the shell HTML (all static).
+#[derive(Clone, Copy)]
+struct ChromeNodes {
+    console: usize,
+    divider: usize,
+    tb_console: usize,
+    tb_clear: usize,
+}
+
+/// A chrome interaction noticed during event dispatch; processed after the
+/// driver returns (mutating the doc mid-dispatch invalidates node chains).
+enum ChromeAction {
+    ToggleConsole,
+    ClearConsole,
+    DividerDown,
 }
 
 /// The renderer's document: host-owned shell chrome + console, with the guest
@@ -106,6 +145,12 @@ pub struct GwbDocument {
     guest: Option<crate::abi::GuestRuntime>,
     maps: crate::abi::NodeMaps,
     last_frame: Option<std::time::Instant>,
+    chrome: ChromeNodes,
+    chrome_actions: Vec<ChromeAction>,
+    console_visible: bool,
+    /// Console height in CSS px (the divider drag adjusts it).
+    console_height: f32,
+    console_drag: bool,
 }
 
 impl GwbDocument {
@@ -129,6 +174,17 @@ impl GwbDocument {
         // Guest id 1 = the mount root (spec: the only host node a guest can address).
         maps.fwd.insert(1, mount_node);
         maps.rev.insert(mount_node, 1);
+        let sel = |s: &str| {
+            doc.query_selector(s)
+                .expect("selector parses")
+                .unwrap_or_else(|| panic!("{s} exists in shell HTML"))
+        };
+        let chrome = ChromeNodes {
+            console: sel("#console"),
+            divider: sel("#divider"),
+            tb_console: sel("#tb-console"),
+            tb_clear: sel("#tb-clear"),
+        };
         Self {
             doc,
             log_node,
@@ -139,7 +195,85 @@ impl GwbDocument {
             guest: None,
             maps,
             last_frame: None,
+            chrome,
+            chrome_actions: Vec::new(),
+            console_visible: true,
+            console_height: 240.0,
+            console_drag: false,
         }
+    }
+
+    // ---- window chrome: console visibility, clear, drag-resize ----------
+
+    fn process_chrome_actions(&mut self) {
+        for action in std::mem::take(&mut self.chrome_actions) {
+            match action {
+                ChromeAction::ToggleConsole => self.set_console_visible(!self.console_visible),
+                ChromeAction::ClearConsole => {
+                    self.lines.clear();
+                    self.partial_out.clear();
+                    self.partial_err.clear();
+                    self.rebuild_log();
+                    crate::logger::log("ui", "console cleared");
+                }
+                ChromeAction::DividerDown => {
+                    self.console_drag = true;
+                    crate::logger::log("ui", "console resize drag started");
+                }
+            }
+        }
+    }
+
+    fn set_console_visible(&mut self, show: bool) {
+        self.console_visible = show;
+        let mut m = self.doc.mutate();
+        m.set_style_property(self.chrome.console, "display", if show { "flex" } else { "none" });
+        m.set_style_property(self.chrome.divider, "display", if show { "block" } else { "none" });
+        m.set_inner_html(
+            self.chrome.tb_console,
+            if show { "hide console" } else { "show console" },
+        );
+        drop(m);
+        self.dirty = true;
+        crate::logger::log("ui", if show { "console shown" } else { "console hidden" });
+    }
+
+    fn apply_console_height(&mut self) {
+        let css = format!("{}px", self.console_height.round());
+        let mut m = self.doc.mutate();
+        m.set_style_property(self.chrome.console, "height", &css);
+        drop(m);
+        self.dirty = true;
+    }
+
+    pub fn console_drag_active(&self) -> bool {
+        self.console_drag
+    }
+
+    /// Drag tick: pointer at physical `y`; console takes the space below it.
+    pub fn drag_console_to(&mut self, phys_y: f64) {
+        let (scale, win_h) = {
+            let inner = self.doc.inner();
+            let vp = inner.viewport();
+            (vp.scale_f64(), vp.window_size.1 as f64)
+        };
+        if scale <= 0.0 || win_h <= 0.0 {
+            return;
+        }
+        let total_css = (win_h / scale) as f32;
+        let new_h = (total_css - (phys_y / scale) as f32).clamp(48.0, (total_css - 120.0).max(48.0));
+        if (new_h - self.console_height).abs() >= 1.0 {
+            self.console_height = new_h;
+            self.apply_console_height();
+        }
+    }
+
+    pub fn end_console_drag(&mut self) {
+        self.console_drag = false;
+        crate::logger::log(
+            "ui",
+            &format!("console resized to {}px", self.console_height.round()),
+        );
     }
 
     /// Attach a started GWB guest: apply its initial batches immediately,
@@ -238,21 +372,7 @@ impl GwbDocument {
         let is_input = node
             .element_data()
             .is_some_and(|el| matches!(&*el.name.local, "input" | "textarea"));
-        let event = DomEvent::new(nid, data);
-        if self.guest.is_some() {
-            {
-                let rt = self.guest.as_mut().unwrap();
-                let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
-                let mut driver = EventDriver::new(&mut self.doc, handler);
-                driver.handle_dom_event(event);
-            }
-            self.apply_guest_batches();
-            self.dirty = true;
-            self.check_observations();
-        } else {
-            let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
-            driver.handle_dom_event(event);
-        }
+        self.script_dispatch(nid, data);
         // The pointer-down default (focus-on-click) didn't run; emulate it so
         // `click #input` + `type ...` composes naturally (caret at end). The
         // synthetic Focus event keeps guest onFocus handlers honest too.
@@ -284,24 +404,29 @@ impl GwbDocument {
         true
     }
 
-    /// Dispatch one synthetic DomEvent at a node through the guest event
-    /// pipeline (shared by hover/unhover/rclick/wheel below).
+    /// Dispatch one synthetic DomEvent at a node through the shell + guest
+    /// event pipeline (shared by click/hover/unhover/rclick/wheel).
     fn script_dispatch(&mut self, nid: usize, data: blitz_traits::events::DomEventData) {
         let event = DomEvent::new(nid, data);
+        {
+            let guest = match self.guest.as_mut() {
+                Some(rt) => Some((rt, &mut self.maps)),
+                None => None,
+            };
+            let handler = ShellEventHandler {
+                guest,
+                chrome: self.chrome,
+                actions: &mut self.chrome_actions,
+            };
+            let mut driver = EventDriver::new(&mut self.doc, handler);
+            driver.handle_dom_event(event);
+        }
         if self.guest.is_some() {
-            {
-                let rt = self.guest.as_mut().unwrap();
-                let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
-                let mut driver = EventDriver::new(&mut self.doc, handler);
-                driver.handle_dom_event(event);
-            }
             self.apply_guest_batches();
             self.dirty = true;
             self.check_observations();
-        } else {
-            let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
-            driver.handle_dom_event(event);
         }
+        self.process_chrome_actions();
     }
 
     /// Pointer-family synthesis: borrow the click event's coords/buttons and
@@ -595,34 +720,41 @@ impl Document for GwbDocument {
     }
 
     fn handle_ui_event(&mut self, event: UiEvent) {
+        {
+            let guest = match self.guest.as_mut() {
+                Some(rt) => Some((rt, &mut self.maps)),
+                None => None,
+            };
+            let handler = ShellEventHandler {
+                guest,
+                chrome: self.chrome,
+                actions: &mut self.chrome_actions,
+            };
+            let mut driver = EventDriver::new(&mut self.doc, handler);
+            driver.handle_ui_event(event);
+        }
+        // Post-dispatch: apply everything the guest submitted during the
+        // dispatch, now that the driver no longer holds node chains; then
+        // run any chrome actions the dispatch queued.
         if self.guest.is_some() {
-            {
-                let rt = self.guest.as_mut().unwrap();
-                let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
-                let mut driver = EventDriver::new(&mut self.doc, handler);
-                driver.handle_ui_event(event);
-            }
-            // Post-dispatch: apply everything the guest submitted during the
-            // dispatch, now that the driver no longer holds node chains.
             self.apply_guest_batches();
             self.dirty = true;
             self.check_observations();
-        } else {
-            let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
-            driver.handle_ui_event(event);
         }
+        self.process_chrome_actions();
     }
 }
 
-/// Routes hit-tested DOM events to the GWB guest and applies the batches the
-/// guest submits in response — the full interactive loop, inside one dispatch.
-struct GwbEventHandler<'a> {
-    rt: &'a mut crate::abi::GuestRuntime,
-    maps: &'a mut crate::abi::NodeMaps,
-    mutated: bool,
+/// Routes hit-tested DOM events: host chrome first (toolbar buttons, console
+/// divider), then the GWB guest — the full interactive loop, inside one
+/// dispatch. Chrome actions are queued and processed post-dispatch.
+struct ShellEventHandler<'a> {
+    guest: Option<(&'a mut crate::abi::GuestRuntime, &'a mut crate::abi::NodeMaps)>,
+    chrome: ChromeNodes,
+    actions: &'a mut Vec<ChromeAction>,
 }
 
-impl EventHandler for GwbEventHandler<'_> {
+impl EventHandler for ShellEventHandler<'_> {
     fn handle_event(
         &mut self,
         chain: &[usize],
@@ -630,18 +762,39 @@ impl EventHandler for GwbEventHandler<'_> {
         doc: &mut dyn Document,
         event_state: &mut EventState,
     ) {
+        use blitz_traits::events::DomEventData as D;
+        match &event.data {
+            D::Click(_) => {
+                if chain.contains(&self.chrome.tb_console) {
+                    self.actions.push(ChromeAction::ToggleConsole);
+                    return;
+                }
+                if chain.contains(&self.chrome.tb_clear) {
+                    self.actions.push(ChromeAction::ClearConsole);
+                    return;
+                }
+            }
+            D::PointerDown(_) => {
+                if chain.contains(&self.chrome.divider) {
+                    self.actions.push(ChromeAction::DividerDown);
+                    return;
+                }
+            }
+            _ => {}
+        }
+
+        let Some((rt, maps)) = self.guest.as_mut() else { return };
         let Some(eo) = crate::abi::map_dom_event(&event.data) else { return };
 
         // Bubble host-side: nearest subscribed ancestor in the chain wins.
         let listener = chain.iter().find_map(|nid| {
-            self.maps
-                .rev
+            maps.rev
                 .get(nid)
                 .copied()
-                .filter(|gid| self.maps.listeners.contains(&(*gid, eo.kind)))
+                .filter(|gid| maps.listeners.contains(&(*gid, eo.kind)))
         });
         let Some(listener) = listener else { return };
-        let target = self.maps.rev.get(&event.target).copied().unwrap_or(listener);
+        let target = maps.rev.get(&event.target).copied().unwrap_or(listener);
 
         let preventable = event.cancelable;
         let record_flags = if preventable { 1u16 } else { 0 };
@@ -651,7 +804,7 @@ impl EventHandler for GwbEventHandler<'_> {
         // mid-dispatch invalidates the driver's node chain (learned the hard
         // way: Remove mid-chain panicked blitz-dom node.rs:1119).
         let _ = doc;
-        match self.rt.deliver_event(&eo, record_flags, target, listener) {
+        match rt.deliver_event(&eo, record_flags, target, listener) {
             Ok(flags) => {
                 if eo.kind != crate::abi::ev::POINTER_MOVE {
                     crate::logger::log(
@@ -669,8 +822,7 @@ impl EventHandler for GwbEventHandler<'_> {
                 if flags & 2 != 0 {
                     event_state.stop_propagation();
                 }
-                if !self.rt.shared.lock().unwrap().batches.is_empty() {
-                    self.mutated = true;
+                if !rt.shared.lock().unwrap().batches.is_empty() {
                     event.request_redraw = true;
                 }
             }
@@ -818,6 +970,27 @@ impl ApplicationHandler for GwbApplication {
     ) {
         if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
             crate::logger::log("ui", &format!("window event: {event:?}"));
+        }
+        // Console divider drag: tracked at window level so fast pointer moves
+        // can't escape the 6px divider (the DOM pointer-down on #divider
+        // starts it; any button release ends it).
+        if let Some(window) = self.inner.windows.get_mut(&window_id) {
+            let doc = window.downcast_doc_mut::<GwbDocument>();
+            if doc.console_drag_active() {
+                match &event {
+                    WindowEvent::PointerMoved { position, .. } => {
+                        doc.drag_console_to(position.y);
+                        window.poll();
+                        window.request_redraw();
+                        return; // consumed: no hover churn mid-drag
+                    }
+                    WindowEvent::PointerButton { state, .. } if !state.is_pressed() => {
+                        doc.end_console_drag();
+                        // fall through so blitz clears its pressed-button state
+                    }
+                    _ => {}
+                }
+            }
         }
         // Capture window-level facts the guest may subscribe to before the
         // event is consumed by the inner application.

@@ -1,0 +1,9 @@
+# window chrome: toolbar view options (hide/show/clear console)
+wait 500
+click #tb-console
+wait 300
+click #tb-console
+wait 300
+click #tb-clear
+wait 300
+quit
