@@ -216,6 +216,47 @@ host              := wasmtime import, standard across all SDKs; the SPEC
 - **Legacy ramp**: `rpc-over-HTTPS` POST binding to a gateway, so a plain
   web server can host a service on day one.
 
+## 4b. The wire is binary — no document transport
+
+The same thesis that produced the DOM ABI (binary frames beat text at every
+boundary; measured 29 ns/op vs the JS layer) applies below: **HTTP is a
+document-delivery protocol and next.0 does not ship documents.** It ships
+chunks, symbols, and RPC frames. The native wire has no HTTP anywhere:
+
+```
+native transport := QUIC datagrams/streams carrying length-prefixed frames
+frame            := u8 kind | varint len | body
+kinds            := SYMBOL   (root, block, symbol id, payload)   - fountain rx/tx
+                    HAVE/WANT (compact bitsets, not piece lists) - swarm gossip
+                    RPC      (CBOR body, §4)                     - services
+                    MANIFEST (signed record)                     - resolution
+```
+
+What that deletes, per request, versus the HTTP-document web:
+
+- **Header tax**: HTTP request+response headers run 0.5–2 KB of *text* per
+  object (cookies, accept lines, cache directives, CORS theater), often
+  exceeding the payload for small objects. Frames carry a few bytes of
+  binary framing; there are no per-object negotiations because content is
+  self-describing by hash.
+- **Envelope tax**: no JSON-for-everything (2–5× size vs CBOR/raw, plus
+  parse cost), no base64 (+33% for binary-in-text), no multipart MIME, no
+  chunked-transfer text framing. Numbers travel as numbers.
+- **Semantic tax**: no per-object request/response round trip — fountain
+  symbols stream until the receiver says stop (WANT bitset flips), which is
+  where the latency win compounds with §3: request-less transfer means the
+  slowest link adds ε symbols, not RTTs.
+- **Connection tax**: one QUIC association multiplexes swarm + RPC +
+  resolution; 0-RTT resumption for repeat peers. No TCP+TLS+H2 stack-up,
+  no head-of-line blocking, no per-origin connection pools.
+
+The gateway ramp (§3) is the deliberate exception, and even there HTTP is
+demoted to a **dumb byte pipe**: one `GET /b3/<root>?blocks=...` returns a
+raw frame stream (`Content-Type: application/wnx-frames`); headers amortize
+over megabytes, not per object, and nothing above the socket is HTTP-shaped.
+Legacy compatibility costs one header block per bundle, not one per asset —
+the 100-requests-per-page waterfall dies with the page model itself.
+
 ## 5. Privacy: separate the who from the what
 
 Threats, in order of realism: (a) services correlating users, (b) network
