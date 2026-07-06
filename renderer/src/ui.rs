@@ -299,6 +299,24 @@ impl GwbDocument {
         );
     }
 
+    /// Keep the console from swallowing a shrunken window: clamp its height
+    /// to leave at least 120 CSS px of app area.
+    pub fn clamp_console_to_window(&mut self) {
+        let (scale, win_h) = {
+            let inner = self.doc.inner();
+            let vp = inner.viewport();
+            (vp.scale_f64(), vp.window_size.1 as f64)
+        };
+        if scale <= 0.0 || win_h <= 0.0 {
+            return;
+        }
+        let max_h = ((win_h / scale) as f32 - 120.0).max(48.0);
+        if self.console_height > max_h {
+            self.console_height = max_h;
+            self.apply_console_height();
+        }
+    }
+
     /// Attach a started GWB guest: apply its initial batches immediately,
     /// then deliver the one-shot PAGE_LOAD event (guests subscribe on the
     /// mount root during gwb_start; unsubscribed guests never see it).
@@ -786,6 +804,21 @@ impl EventHandler for ShellEventHandler<'_> {
         event_state: &mut EventState,
     ) {
         use blitz_traits::events::DomEventData as D;
+        // Hit-test diagnostics: where did this click actually land?
+        if let D::Click(pe) = &event.data {
+            crate::logger::log(
+                "hit",
+                &format!(
+                    "click page=({:.0},{:.0}) client=({:.0},{:.0}) target={} chain_len={}",
+                    pe.page_x(),
+                    pe.page_y(),
+                    pe.client_x(),
+                    pe.client_y(),
+                    event.target,
+                    chain.len()
+                ),
+            );
+        }
         match &event.data {
             D::Click(_) => {
                 if chain.contains(&self.chrome.tb_console) {
@@ -1019,6 +1052,15 @@ impl ApplicationHandler for GwbApplication {
                 }
             }
         }
+        // Raw-input diagnostics: does the OS event reach us at all?
+        if let WindowEvent::PointerButton { state, position, .. } = &event {
+            if state.is_pressed() {
+                crate::logger::log(
+                    "hit",
+                    &format!("raw pointer-down physical=({:.0},{:.0})", position.x, position.y),
+                );
+            }
+        }
         // Capture window-level facts the guest may subscribe to before the
         // event is consumed by the inner application.
         let notify: Option<crate::abi::EventOut> = match &event {
@@ -1034,7 +1076,11 @@ impl ApplicationHandler for GwbApplication {
         self.inner.window_event(event_loop, window_id, event);
         if let Some(eo) = notify {
             if let Some(window) = self.inner.windows.get_mut(&window_id) {
-                window.downcast_doc_mut::<GwbDocument>().notify_window_event(eo);
+                let doc = window.downcast_doc_mut::<GwbDocument>();
+                if eo.kind == crate::abi::ev::WINDOW_RESIZE {
+                    doc.clamp_console_to_window();
+                }
+                doc.notify_window_event(eo);
                 window.poll();
                 window.request_redraw();
             }
