@@ -14,7 +14,7 @@ use blitz_dom::{
 };
 use blitz_html::{HtmlDocument, HtmlProvider};
 use blitz_shell::{BlitzApplication, BlitzShellEvent, WindowConfig};
-use blitz_traits::events::{DomEvent, DomEventData, EventState, UiEvent};
+use blitz_traits::events::{DomEvent, EventState, UiEvent};
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -106,6 +106,7 @@ pub struct GwbDocument {
     /// GWB guest runtime + id maps (None in legacy console mode).
     guest: Option<crate::abi::GuestRuntime>,
     maps: crate::abi::NodeMaps,
+    last_frame: Option<std::time::Instant>,
 }
 
 impl GwbDocument {
@@ -138,6 +139,7 @@ impl GwbDocument {
             dirty: false,
             guest: None,
             maps,
+            last_frame: None,
         }
     }
 
@@ -148,6 +150,78 @@ impl GwbDocument {
         crate::logger::log("abi", &format!("initial mount: {applied} ops applied"));
         self.guest = Some(rt);
         self.dirty = true;
+    }
+
+    /// Record the winit window id so request_frame can wake the event loop.
+    pub fn set_window_id(&mut self, id: WindowId) {
+        if let Some(rt) = &self.guest {
+            rt.shared.lock().unwrap().window_id = Some(id);
+        }
+    }
+
+    /// Whether the guest has an undelivered request_frame.
+    pub fn frame_pending(&self) -> bool {
+        self.guest
+            .as_ref()
+            .is_some_and(|rt| rt.shared.lock().unwrap().frame_requested)
+    }
+
+    /// Deliver a window-level event (resize/theme) if the guest subscribed on
+    /// the mount root (guest id 1).
+    pub fn notify_window_event(&mut self, eo: crate::abi::EventOut) {
+        let Some(rt) = self.guest.as_mut() else { return };
+        if !self.maps.listeners.contains(&(1, eo.kind)) {
+            return;
+        }
+        match rt.deliver_event(&eo, 0, 1, 1) {
+            Ok(_) => {
+                let shared = rt.shared.clone();
+                if crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared) > 0 {
+                    self.dirty = true;
+                }
+            }
+            Err(e) => crate::logger::log("crash", &format!("window event delivery failed: {e:#}")),
+        }
+    }
+
+    /// Emit observed_layout records for Observe'd nodes whose geometry changed.
+    /// Returns true if the guest mutated the DOM in response.
+    fn check_observations(&mut self) -> bool {
+        let Some(rt) = self.guest.as_mut() else { return false };
+        if self.maps.observers.is_empty() {
+            return false;
+        }
+        // Collect changed rects first (read-only pass over the layout tree).
+        let mut changes: Vec<(u32, [f32; 4])> = Vec::new();
+        for (&gid, &what) in &self.maps.observers {
+            if what & crate::abi::obs::LAYOUT == 0 {
+                continue;
+            }
+            let Some(&nid) = self.maps.fwd.get(&gid) else { continue };
+            let Some(node) = self.doc.get_node(nid) else { continue };
+            let pos = node.absolute_position(0.0, 0.0);
+            let size = node.final_layout.size;
+            let rect = [pos.x, pos.y, size.width, size.height];
+            if self.maps.last_rects.get(&gid) != Some(&rect) {
+                changes.push((gid, rect));
+            }
+        }
+        if changes.is_empty() {
+            return false;
+        }
+        for (gid, rect) in &changes {
+            self.maps.last_rects.insert(*gid, *rect);
+            let eo = crate::abi::EventOut::layout_rect(*rect);
+            if let Err(e) = rt.deliver_event(&eo, 0, *gid, *gid) {
+                crate::logger::log("crash", &format!("observation delivery failed: {e:#}"));
+            }
+        }
+        let shared = rt.shared.clone();
+        let applied = crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+        if applied > 0 {
+            self.dirty = true;
+        }
+        applied > 0
     }
 
     pub fn push_chunk(&mut self, source: Source, bytes: &[u8]) {
@@ -228,7 +302,32 @@ impl Document for GwbDocument {
     }
 
     fn poll(&mut self, _task_context: Option<std::task::Context<'_>>) -> bool {
-        std::mem::take(&mut self.dirty)
+        let mut dirty = std::mem::take(&mut self.dirty);
+
+        // Animation frames: deliver gwb_frame if the guest requested one.
+        if let Some(rt) = self.guest.as_mut() {
+            let wanted = std::mem::take(&mut rt.shared.lock().unwrap().frame_requested);
+            if wanted {
+                let now = std::time::Instant::now();
+                let dt = self
+                    .last_frame
+                    .map(|t| now.duration_since(t).as_secs_f32() * 1000.0)
+                    .unwrap_or(16.6);
+                self.last_frame = Some(now);
+                if let Err(e) = rt.deliver_frame(dt) {
+                    crate::logger::log("crash", &format!("gwb_frame failed: {e:#}"));
+                }
+                let shared = rt.shared.clone();
+                if crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared) > 0 {
+                    dirty = true;
+                }
+            }
+        }
+
+        if self.check_observations() {
+            dirty = true;
+        }
+        dirty
     }
 
     fn handle_ui_event(&mut self, event: UiEvent) {
@@ -237,6 +336,7 @@ impl Document for GwbDocument {
             let mut driver = EventDriver::new(&mut self.doc, handler);
             driver.handle_ui_event(event);
             self.dirty = true;
+            self.check_observations();
         } else {
             let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
             driver.handle_ui_event(event);
@@ -258,13 +358,9 @@ impl EventHandler for GwbEventHandler<'_> {
         chain: &[usize],
         event: &mut DomEvent,
         doc: &mut dyn Document,
-        _event_state: &mut EventState,
+        event_state: &mut EventState,
     ) {
-        // v0: clicks only.
-        let (kind, x, y) = match &event.data {
-            DomEventData::Click(p) => (crate::abi::ev::CLICK, p.page_x(), p.page_y()),
-            _ => return,
-        };
+        let Some(eo) = crate::abi::map_dom_event(&event.data) else { return };
 
         // Bubble host-side: nearest subscribed ancestor in the chain wins.
         let listener = chain.iter().find_map(|nid| {
@@ -272,22 +368,33 @@ impl EventHandler for GwbEventHandler<'_> {
                 .rev
                 .get(nid)
                 .copied()
-                .filter(|gid| self.maps.listeners.contains(&(*gid, kind)))
+                .filter(|gid| self.maps.listeners.contains(&(*gid, eo.kind)))
         });
         let Some(listener) = listener else { return };
         let target = self.maps.rev.get(&event.target).copied().unwrap_or(listener);
 
-        crate::logger::log(
-            "event",
-            &format!("click -> guest (target={target} listener={listener} x={x:.0} y={y:.0})"),
-        );
-        match self.rt.deliver_click(target, listener, x, y) {
-            Ok(_flags) => {
+        let preventable = event.cancelable;
+        let record_flags = if preventable { 1u16 } else { 0 };
+        if eo.kind != crate::abi::ev::POINTER_MOVE {
+            crate::logger::log(
+                "event",
+                &format!("{} -> guest (target={target} listener={listener})", event.name()),
+            );
+        }
+        match self.rt.deliver_event(&eo, record_flags, target, listener) {
+            Ok(flags) => {
+                if preventable && flags & 1 != 0 {
+                    event_state.prevent_default();
+                }
+                if flags & 2 != 0 {
+                    event_state.stop_propagation();
+                }
                 let shared = self.rt.shared.clone();
                 let mut guard = doc.inner_mut();
                 let applied = crate::abi::apply_batches(&mut guard, self.maps, &shared);
                 if applied > 0 {
                     self.mutated = true;
+                    event.request_redraw = true;
                 }
             }
             Err(e) => crate::logger::log("crash", &format!("guest event handler failed: {e:#}")),
@@ -349,6 +456,13 @@ impl ApplicationHandler for GwbApplication {
             "ui",
             &format!("window surface(s) created ({} window)", self.inner.windows.len()),
         );
+        // Give each GWB document its window id (request_frame wake-ups).
+        let ids: Vec<WindowId> = self.inner.windows.keys().copied().collect();
+        for id in ids {
+            if let Some(window) = self.inner.windows.get_mut(&id) {
+                window.downcast_doc_mut::<GwbDocument>().set_window_id(id);
+            }
+        }
         self.flush_pending();
     }
 
@@ -369,11 +483,40 @@ impl ApplicationHandler for GwbApplication {
         if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
             crate::logger::log("ui", &format!("window event: {event:?}"));
         }
+        // Capture window-level facts the guest may subscribe to before the
+        // event is consumed by the inner application.
+        let notify: Option<crate::abi::EventOut> = match &event {
+            WindowEvent::SurfaceResized(size) => {
+                Some(crate::abi::EventOut::window_resize(size.width as f32, size.height as f32, 1.0))
+            }
+            WindowEvent::ThemeChanged(theme) => Some(crate::abi::EventOut::theme_change(matches!(
+                theme,
+                winit::window::Theme::Dark
+            ))),
+            _ => None,
+        };
         self.inner.window_event(event_loop, window_id, event);
+        if let Some(eo) = notify {
+            if let Some(window) = self.inner.windows.get_mut(&window_id) {
+                window.downcast_doc_mut::<GwbDocument>().notify_window_event(eo);
+                window.poll();
+                window.request_redraw();
+            }
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.inner.about_to_wait(event_loop);
+        // Frame pump: deliver pending gwb_frame ticks, paced by the redraw
+        // stream (poll -> dirty -> request_redraw -> vsync present -> next
+        // about_to_wait). Idle guests cost nothing here.
+        for window in self.inner.windows.values_mut() {
+            let doc = window.downcast_doc_mut::<GwbDocument>();
+            if doc.frame_pending() {
+                window.poll();
+                window.request_redraw();
+            }
+        }
     }
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {

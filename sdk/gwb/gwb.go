@@ -57,7 +57,45 @@ const (
 
 // Event kinds.
 const (
-	EvClick uint16 = 4
+	EvPointerDown   uint16 = 1
+	EvPointerUp     uint16 = 2
+	EvPointerMove   uint16 = 3
+	EvClick         uint16 = 4
+	EvDblClick      uint16 = 5
+	EvPointerEnter  uint16 = 6
+	EvPointerLeave  uint16 = 7
+	EvWheel         uint16 = 8
+	EvKeyDown       uint16 = 9
+	EvKeyUp         uint16 = 10
+	EvTextInput     uint16 = 11
+	EvInput         uint16 = 12
+	EvFocus         uint16 = 15
+	EvBlur          uint16 = 16
+	EvScroll        uint16 = 17
+	EvWindowResize  uint16 = 18
+	EvThemeChange   uint16 = 19
+	EvContextMenu   uint16 = 20
+	EvPointerCancel uint16 = 21
+
+	EvObservedLayout     uint16 = 32
+	EvObservedVisibility uint16 = 33
+)
+
+// Event record flags.
+const (
+	FlagPreventable uint16 = 1
+)
+
+// gwb_events return flags (honored only for preventable deliveries).
+const (
+	RetPreventDefault  uint32 = 1
+	RetStopPropagation uint32 = 2
+)
+
+// Observe() what-bits.
+const (
+	ObserveLayout     uint32 = 1
+	ObserveVisibility uint32 = 2
 )
 
 // Log levels.
@@ -74,11 +112,22 @@ const noStr uint32 = 0xFFFFFFFF
 var (
 	// OnStart builds the initial DOM. The default batch auto-flushes after.
 	OnStart func(w, h, scale float32, flags uint32)
-	// OnEvent handles one event record; return ABI flags (0 for none).
+	// OnEvent handles one event record; return Ret* flags (0 for none).
 	OnEvent func(e *Event) uint32
+	// OnFrame is the animation tick, delivered only after RequestFrame().
+	OnFrame func(dtMS float32)
 )
 
-// Event is a decoded event record.
+// Event is a decoded event record. Fields are populated per kind:
+//
+//	pointer/click/context:  X, Y, Buttons, Mods
+//	wheel:                  DX, DY, Mods
+//	key down/up:            Mods, Pressed, Str (key text or name)
+//	text_input, input:      Str (typed text / control value)
+//	scroll:                 X (scrollLeft), Y (scrollTop)
+//	window_resize:          W, H, Scale
+//	theme_change:           Dark
+//	observed_layout:        X, Y, W, H (border-box, viewport-relative)
 type Event struct {
 	Kind     uint16
 	Flags    uint16
@@ -86,10 +135,18 @@ type Event struct {
 	Listener uint32
 	TimeMS   float64
 	X, Y     float32
+	W, H     float32
+	DX, DY   float32
+	Scale    float32
 	Buttons  uint16
 	Mods     uint16
+	Pressed  bool
+	Dark     bool
 	Str      string
 }
+
+// Preventable reports whether the host is waiting on this event's verdict.
+func (e *Event) Preventable() bool { return e.Flags&FlagPreventable != 0 }
 
 // eventBuf is the registered event region.
 var eventBuf [8192]byte
@@ -144,12 +201,19 @@ func (b *Batch) SetText(id uint32, text string)         { b.op(5, 0, 0, id, 0, b
 func (b *Batch) SetStyle(id, prop uint32, value string) { b.op(6, 0, 0, id, prop, b.str(value)) }
 func (b *Batch) RemoveStyle(id, prop uint32)            { b.op(7, 0, 0, id, prop, noStr) }
 func (b *Batch) AppendChild(parent, child uint32)       { b.op(8, 0, 0, parent, child, noStr) }
-func (b *Batch) Remove(id uint32)                       { b.op(10, 0, 0, id, 0, noStr) }
-func (b *Batch) Clear(id uint32)                        { b.op(12, 0, 0, id, 0, noStr) }
-func (b *Batch) SetInnerHTML(id uint32, html string)    { b.op(13, 0, 0, id, 0, b.str(html)) }
-func (b *Batch) DefineAtom(atom uint32, name string)    { b.op(14, 0, 0, atom, 0, b.str(name)) }
-func (b *Batch) Listen(id uint32, kind uint16)          { b.op(15, 0, kind, id, 0, noStr) }
-func (b *Batch) Unlisten(id uint32, kind uint16)        { b.op(16, 0, kind, id, 0, noStr) }
+func (b *Batch) InsertBefore(parent, child, before uint32) {
+	b.op(9, 0, 0, parent, child, before)
+}
+func (b *Batch) Remove(id uint32)                    { b.op(10, 0, 0, id, 0, noStr) }
+func (b *Batch) ReplaceWith(old, new uint32)         { b.op(11, 0, 0, old, new, noStr) }
+func (b *Batch) Clear(id uint32)                     { b.op(12, 0, 0, id, 0, noStr) }
+func (b *Batch) SetInnerHTML(id uint32, html string) { b.op(13, 0, 0, id, 0, b.str(html)) }
+func (b *Batch) DefineAtom(atom uint32, name string) { b.op(14, 0, 0, atom, 0, b.str(name)) }
+func (b *Batch) Listen(id uint32, kind uint16)       { b.op(15, 0, kind, id, 0, noStr) }
+func (b *Batch) Unlisten(id uint32, kind uint16)     { b.op(16, 0, kind, id, 0, noStr) }
+func (b *Batch) Observe(id uint32, what uint32)      { b.op(17, 0, 0, id, what, noStr) }
+func (b *Batch) Unobserve(id uint32, what uint32)    { b.op(18, 0, 0, id, what, noStr) }
+func (b *Batch) Focus(id uint32)                     { b.op(19, 0, 0, id, 0, noStr) }
 
 // Submit encodes and submits the batch, then resets it for reuse.
 func (b *Batch) Submit() uint32 {
@@ -175,17 +239,25 @@ func (b *Batch) Submit() uint32 {
 // OnStart/OnEvent return).
 var def Batch
 
-func CreateElement(id, tag uint32)           { def.CreateElement(id, tag) }
-func CreateText(id uint32, text string)      { def.CreateText(id, text) }
-func SetAttr(id, name uint32, value string)  { def.SetAttr(id, name, value) }
-func SetText(id uint32, text string)         { def.SetText(id, text) }
-func SetStyle(id, prop uint32, value string) { def.SetStyle(id, prop, value) }
-func AppendChild(parent, child uint32)       { def.AppendChild(parent, child) }
-func Remove(id uint32)                       { def.Remove(id) }
-func Clear(id uint32)                        { def.Clear(id) }
-func SetInnerHTML(id uint32, html string)    { def.SetInnerHTML(id, html) }
-func DefineAtom(atom uint32, name string)    { def.DefineAtom(atom, name) }
-func Listen(id uint32, kind uint16)          { def.Listen(id, kind) }
+func CreateElement(id, tag uint32)              { def.CreateElement(id, tag) }
+func CreateText(id uint32, text string)         { def.CreateText(id, text) }
+func SetAttr(id, name uint32, value string)     { def.SetAttr(id, name, value) }
+func RemoveAttr(id, name uint32)                { def.RemoveAttr(id, name) }
+func SetText(id uint32, text string)            { def.SetText(id, text) }
+func SetStyle(id, prop uint32, value string)    { def.SetStyle(id, prop, value) }
+func RemoveStyle(id, prop uint32)               { def.RemoveStyle(id, prop) }
+func AppendChild(parent, child uint32)          { def.AppendChild(parent, child) }
+func InsertBefore(parent, child, before uint32) { def.InsertBefore(parent, child, before) }
+func Remove(id uint32)                          { def.Remove(id) }
+func ReplaceWith(old, new uint32)               { def.ReplaceWith(old, new) }
+func Clear(id uint32)                           { def.Clear(id) }
+func SetInnerHTML(id uint32, html string)       { def.SetInnerHTML(id, html) }
+func DefineAtom(atom uint32, name string)       { def.DefineAtom(atom, name) }
+func Listen(id uint32, kind uint16)             { def.Listen(id, kind) }
+func Unlisten(id uint32, kind uint16)           { def.Unlisten(id, kind) }
+func Observe(id uint32, what uint32)            { def.Observe(id, what) }
+func Unobserve(id uint32, what uint32)          { def.Unobserve(id, what) }
+func Focus(id uint32)                           { def.Focus(id) }
 
 // Flush submits the default batch (normally automatic).
 func Flush() { def.Submit() }
@@ -200,10 +272,21 @@ func dispatchStart(w, h, scale float32, flags uint32) {
 	Flush()
 }
 
+func dispatchFrame(dtMS float32) {
+	if OnFrame != nil {
+		OnFrame(dtMS)
+	}
+	Flush()
+}
+
+func f32at(r []byte, off int) float32 {
+	return math.Float32frombits(binary.LittleEndian.Uint32(r[off : off+4]))
+}
+
 func dispatchEvents(count uint32) uint32 {
 	var ret uint32
 	off := 0
-	for i := uint32(0); i < count; i++ {
+	for range count {
 		if off+40 > len(eventBuf) {
 			break
 		}
@@ -214,10 +297,36 @@ func dispatchEvents(count uint32) uint32 {
 			Target:   binary.LittleEndian.Uint32(r[4:8]),
 			Listener: binary.LittleEndian.Uint32(r[8:12]),
 			TimeMS:   math.Float64frombits(binary.LittleEndian.Uint64(r[12:20])),
-			X:        math.Float32frombits(binary.LittleEndian.Uint32(r[20:24])),
-			Y:        math.Float32frombits(binary.LittleEndian.Uint32(r[24:28])),
-			Buttons:  binary.LittleEndian.Uint16(r[28:30]),
-			Mods:     binary.LittleEndian.Uint16(r[30:32]),
+		}
+		// Kind-specific payload (bytes 20..36 of the record).
+		switch e.Kind {
+		case EvPointerDown, EvPointerUp, EvPointerMove, EvClick, EvDblClick,
+			EvPointerEnter, EvPointerLeave, EvPointerCancel, EvContextMenu:
+			e.X = f32at(r, 20)
+			e.Y = f32at(r, 24)
+			e.Buttons = binary.LittleEndian.Uint16(r[28:30])
+			e.Mods = binary.LittleEndian.Uint16(r[30:32])
+		case EvWheel:
+			e.DX = f32at(r, 20)
+			e.DY = f32at(r, 24)
+			e.Mods = binary.LittleEndian.Uint16(r[28:30])
+		case EvKeyDown, EvKeyUp, EvTextInput:
+			e.Mods = binary.LittleEndian.Uint16(r[22:24])
+			e.Pressed = r[24] != 0
+		case EvScroll:
+			e.X = f32at(r, 20)
+			e.Y = f32at(r, 24)
+		case EvWindowResize:
+			e.W = f32at(r, 20)
+			e.H = f32at(r, 24)
+			e.Scale = f32at(r, 28)
+		case EvThemeChange:
+			e.Dark = binary.LittleEndian.Uint32(r[20:24]) != 0
+		case EvObservedLayout:
+			e.X = f32at(r, 20)
+			e.Y = f32at(r, 24)
+			e.W = f32at(r, 28)
+			e.H = f32at(r, 32)
 		}
 		strLen := int(binary.LittleEndian.Uint32(r[36:40]))
 		next := off + 40

@@ -13,6 +13,13 @@ func impEventRegion(ptr unsafe.Pointer, length uint32)
 //go:wasmimport gwb log
 func impLog(level uint32, ptr unsafe.Pointer, length uint32)
 
+//go:wasmimport gwb request_frame
+func impRequestFrame()
+
+// RequestFrame schedules exactly one OnFrame call at the next paint.
+// Call it again inside OnFrame for continuous animation.
+func RequestFrame() { impRequestFrame() }
+
 func hostSubmit(buf []byte) uint32 {
 	if len(buf) == 0 {
 		return 0
@@ -41,4 +48,9 @@ func gwbStart(w, h, scale float32, flags uint32) {
 //go:wasmexport gwb_events
 func gwbEvents(count uint32) uint32 {
 	return dispatchEvents(count)
+}
+
+//go:wasmexport gwb_frame
+func gwbFrame(dtMS float32) {
+	dispatchFrame(dtMS)
 }

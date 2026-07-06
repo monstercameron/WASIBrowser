@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use blitz_dom::{BaseDocument, LocalName, QualName, ns};
 use blitz_shell::BlitzShellProxy;
 use wasmtime::{Caller, Engine, Extern, Linker, Memory, Module, Store, TypedFunc};
@@ -20,7 +20,34 @@ use crate::ui::{ConsoleMsg, Source};
 pub const ABI_MAJOR: u32 = 1;
 
 pub mod ev {
+    pub const POINTER_DOWN: u16 = 1;
+    pub const POINTER_UP: u16 = 2;
+    pub const POINTER_MOVE: u16 = 3;
     pub const CLICK: u16 = 4;
+    pub const DBLCLICK: u16 = 5;
+    pub const POINTER_ENTER: u16 = 6;
+    pub const POINTER_LEAVE: u16 = 7;
+    pub const WHEEL: u16 = 8;
+    pub const KEY_DOWN: u16 = 9;
+    pub const KEY_UP: u16 = 10;
+    pub const TEXT_INPUT: u16 = 11;
+    pub const INPUT: u16 = 12;
+    // 13 change, 14 submit: reserved (Blitz does not emit them yet)
+    pub const FOCUS: u16 = 15;
+    pub const BLUR: u16 = 16;
+    pub const SCROLL: u16 = 17;
+    pub const WINDOW_RESIZE: u16 = 18;
+    pub const THEME_CHANGE: u16 = 19;
+    pub const CONTEXT_MENU: u16 = 20;
+    pub const POINTER_CANCEL: u16 = 21;
+    pub const OBSERVED_LAYOUT: u16 = 32;
+    pub const OBSERVED_VISIBILITY: u16 = 33;
+}
+
+/// Observe() `what` bits.
+pub mod obs {
+    pub const LAYOUT: u32 = 1;
+    pub const VISIBILITY: u32 = 2;
 }
 
 // ---------------------------------------------------------------- ops
@@ -35,12 +62,17 @@ pub enum Op {
     SetStyle { id: u32, prop: u32, value: String },
     RemoveStyle { id: u32, prop: u32 },
     AppendChild { parent: u32, child: u32 },
+    InsertBefore { child: u32, before: u32 },
     Remove { id: u32 },
+    ReplaceWith { old: u32, new: u32 },
     Clear { id: u32 },
     SetInnerHtml { id: u32, html: String },
     DefineAtom { atom: u32, name: String },
     Listen { id: u32, kind: u16 },
     Unlisten { id: u32, kind: u16 },
+    Observe { id: u32, what: u32 },
+    Unobserve { id: u32, what: u32 },
+    Focus { id: u32 },
 }
 
 // ---------------------------------------------------------------- shared state
@@ -49,6 +81,10 @@ pub struct Shared {
     pub atoms: Vec<Option<String>>,
     pub batches: Vec<Vec<Op>>,
     pub event_region: (u32, u32),
+    /// Guest called request_frame; cleared when gwb_frame is delivered.
+    pub frame_requested: bool,
+    /// Set once the window exists; lets request_frame wake the event loop.
+    pub window_id: Option<winit::window::WindowId>,
 }
 
 /// Well-known atoms 0..1024 (spec appendix; mirrored in sdk/gwb).
@@ -134,12 +170,17 @@ fn decode_batch(bytes: &[u8]) -> Result<Vec<Op>> {
             6 => Op::SetStyle { id: b, prop: c, value: get_str(d)? },
             7 => Op::RemoveStyle { id: b, prop: c },
             8 => Op::AppendChild { parent: b, child: c },
+            9 => Op::InsertBefore { child: c, before: d },
             10 => Op::Remove { id: b },
+            11 => Op::ReplaceWith { old: b, new: c },
             12 => Op::Clear { id: b },
             13 => Op::SetInnerHtml { id: b, html: get_str(d)? },
             14 => Op::DefineAtom { atom: b, name: get_str(d)? },
             15 => Op::Listen { id: b, kind: a },
             16 => Op::Unlisten { id: b, kind: a },
+            17 => Op::Observe { id: b, what: c },
+            18 => Op::Unobserve { id: b, what: c },
+            19 => Op::Focus { id: b },
             other => bail!("unsupported op code {other} at index {i}"),
         };
         ops.push(op);
@@ -157,6 +198,10 @@ pub struct NodeMaps {
     pub rev: HashMap<usize, u32>,
     /// (guest id, event kind) subscriptions
     pub listeners: HashSet<(u32, u16)>,
+    /// guest id -> Observe() what-bits
+    pub observers: HashMap<u32, u32>,
+    /// last delivered layout rect per observed guest id
+    pub last_rects: HashMap<u32, [f32; 4]>,
 }
 
 fn html_name(name: &str) -> QualName {
@@ -176,6 +221,7 @@ pub fn apply_batches(
     let batches = std::mem::take(&mut guard.batches);
 
     let mut applied = 0;
+    let mut focus_target: Option<usize> = None;
     let mut m = doc.mutate();
     for ops in &batches {
         for op in ops {
@@ -235,6 +281,19 @@ pub fn apply_batches(
                         m.append_children(p, &[c]);
                     }
                 }
+                Op::InsertBefore { child, before } => {
+                    if let (Some(c), Some(anchor)) = (node(maps, *child), node(maps, *before)) {
+                        m.insert_nodes_before(anchor, &[c]);
+                    }
+                }
+                Op::ReplaceWith { old, new } => {
+                    if let (Some(o), Some(n)) = (node(maps, *old), node(maps, *new)) {
+                        m.replace_node_with(o, &[n]);
+                        if let Some(g) = maps.rev.remove(&o) {
+                            maps.fwd.remove(&g);
+                        }
+                    }
+                }
                 Op::Remove { id } => {
                     if let Some(n) = node(maps, *id) {
                         m.remove_and_drop_node(n);
@@ -259,10 +318,28 @@ pub fn apply_batches(
                 Op::Unlisten { id, kind } => {
                     maps.listeners.remove(&(*id, *kind));
                 }
+                Op::Observe { id, what } => {
+                    *maps.observers.entry(*id).or_insert(0) |= *what;
+                }
+                Op::Unobserve { id, what } => {
+                    if let Some(bits) = maps.observers.get_mut(id) {
+                        *bits &= !*what;
+                        if *bits == 0 {
+                            maps.observers.remove(id);
+                            maps.last_rects.remove(id);
+                        }
+                    }
+                }
+                Op::Focus { id } => {
+                    focus_target = node(maps, *id);
+                }
             }
         }
     }
     drop(m);
+    if let Some(n) = focus_target {
+        doc.set_focus_to(n);
+    }
     crate::logger::log("abi", &format!("applied {applied} ops from {} batch(es)", batches.len()));
     applied
 }
@@ -280,6 +357,7 @@ pub struct GuestRuntime {
     memory: Memory,
     fn_events: TypedFunc<u32, u32>,
     fn_start: TypedFunc<(f32, f32, f32, u32), ()>,
+    fn_frame: Option<TypedFunc<f32, ()>>,
     started_at: Instant,
     pub shared: Arc<Mutex<Shared>>,
 }
@@ -307,6 +385,8 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         atoms: well_known_atoms(),
         batches: Vec::new(),
         event_region: (0, 0),
+        frame_requested: false,
+        window_id: None,
     }));
 
     let mut linker: Linker<HostState> = Linker::new(&engine);
@@ -365,8 +445,11 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         },
     )?;
 
-    linker.func_wrap("gwb", "request_frame", |_caller: Caller<'_, HostState>| {
-        crate::logger::log("abi", "request_frame (v0: unimplemented)");
+    linker.func_wrap("gwb", "request_frame", |caller: Caller<'_, HostState>| {
+        // Just mark the request. GwbApplication::about_to_wait pumps pending
+        // frames via window.poll() + request_redraw(), so animation is paced
+        // by the redraw/vsync stream instead of spinning the event loop.
+        caller.data().shared.lock().unwrap().frame_requested = true;
     })?;
 
     let wasi = WasiCtxBuilder::new().inherit_stdio().build_p1();
@@ -394,6 +477,9 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         .ok_or_else(|| anyhow!("guest has no exported memory"))?;
     let fn_events = instance.get_typed_func::<u32, u32>(&mut store, "gwb_events")?;
     let fn_start = instance.get_typed_func::<(f32, f32, f32, u32), ()>(&mut store, "gwb_start")?;
+    let fn_frame = instance
+        .get_typed_func::<f32, ()>(&mut store, "gwb_frame")
+        .ok();
 
     crate::logger::log("abi", &format!("gwb guest loaded: {path} abi=v{}.{}", version >> 16, version & 0xFFFF));
     Ok(Some(GuestRuntime {
@@ -401,9 +487,130 @@ pub fn try_load(path: &str, proxy: BlitzShellProxy) -> Result<Option<GuestRuntim
         memory,
         fn_events,
         fn_start,
+        fn_frame,
         started_at: Instant::now(),
         shared,
     }))
+}
+
+/// An encoded outgoing event: (kind, 16-byte payload, optional trailing string).
+pub struct EventOut {
+    pub kind: u16,
+    pub payload: [u8; 16],
+    pub text: Option<String>,
+}
+
+impl EventOut {
+    fn new(kind: u16) -> Self {
+        Self { kind, payload: [0; 16], text: None }
+    }
+    fn f32_at(mut self, off: usize, v: f32) -> Self {
+        self.payload[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        self
+    }
+    fn u16_at(mut self, off: usize, v: u16) -> Self {
+        self.payload[off..off + 2].copy_from_slice(&v.to_le_bytes());
+        self
+    }
+    fn u8_at(mut self, off: usize, v: u8) -> Self {
+        self.payload[off] = v;
+        self
+    }
+    fn u32_at(mut self, off: usize, v: u32) -> Self {
+        self.payload[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        self
+    }
+    fn text(mut self, s: String) -> Self {
+        self.text = Some(s);
+        self
+    }
+
+    pub fn layout_rect(rect: [f32; 4]) -> Self {
+        EventOut::new(ev::OBSERVED_LAYOUT)
+            .f32_at(0, rect[0])
+            .f32_at(4, rect[1])
+            .f32_at(8, rect[2])
+            .f32_at(12, rect[3])
+    }
+
+    pub fn window_resize(w: f32, h: f32, scale: f32) -> Self {
+        EventOut::new(ev::WINDOW_RESIZE)
+            .f32_at(0, w)
+            .f32_at(4, h)
+            .f32_at(8, scale)
+    }
+
+    pub fn theme_change(dark: bool) -> Self {
+        EventOut::new(ev::THEME_CHANGE).u32_at(0, dark as u32)
+    }
+}
+
+/// Map a Blitz DOM event to a GWB event record. Returns None for kinds the
+/// ABI doesn't forward (legacy Mouse*/Touch* duplicates, IME composition).
+pub fn map_dom_event(data: &blitz_traits::events::DomEventData) -> Option<EventOut> {
+    use blitz_traits::events::{BlitzPointerEvent, DomEventData as D};
+
+    fn pointer(kind: u16, p: &BlitzPointerEvent) -> EventOut {
+        EventOut::new(kind)
+            .f32_at(0, p.page_x())
+            .f32_at(4, p.page_y())
+            .u16_at(8, p.buttons.bits() as u16)
+            .u16_at(10, (p.mods.bits() & 0xFFFF) as u16)
+    }
+
+    Some(match data {
+        D::PointerDown(p) => pointer(ev::POINTER_DOWN, p),
+        D::PointerUp(p) => pointer(ev::POINTER_UP, p),
+        D::PointerMove(p) => pointer(ev::POINTER_MOVE, p),
+        D::PointerEnter(p) => pointer(ev::POINTER_ENTER, p),
+        D::PointerLeave(p) => pointer(ev::POINTER_LEAVE, p),
+        D::Click(p) => pointer(ev::CLICK, p),
+        D::DoubleClick(p) => pointer(ev::DBLCLICK, p),
+        D::ContextMenu(p) => pointer(ev::CONTEXT_MENU, p),
+        D::Wheel(w) => {
+            use blitz_traits::events::BlitzWheelDelta;
+            let (dx, dy) = match w.delta {
+                BlitzWheelDelta::Pixels(x, y) => (x as f32, y as f32),
+                // Lines are normalized to pixels with a conventional factor.
+                BlitzWheelDelta::Lines(x, y) => (x as f32 * 40.0, y as f32 * 40.0),
+            };
+            EventOut::new(ev::WHEEL)
+                .f32_at(0, dx)
+                .f32_at(4, dy)
+                .u16_at(8, (w.mods.bits() & 0xFFFF) as u16)
+        }
+        D::KeyDown(k) | D::KeyUp(k) => {
+            let kind = if matches!(data, D::KeyDown(_)) { ev::KEY_DOWN } else { ev::KEY_UP };
+            let text = k
+                .text
+                .as_ref()
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| k.key.to_string());
+            EventOut::new(kind)
+                .u16_at(2, (k.modifiers.bits() & 0xFFFF) as u16)
+                .u8_at(4, k.state.is_pressed() as u8)
+                .text(text)
+        }
+        D::KeyPress(k) => {
+            let text = k
+                .text
+                .as_ref()
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| k.key.to_string());
+            EventOut::new(ev::TEXT_INPUT)
+                .u16_at(2, (k.modifiers.bits() & 0xFFFF) as u16)
+                .text(text)
+        }
+        D::Input(i) => EventOut::new(ev::INPUT).text(i.value.clone()),
+        D::Focus(_) => EventOut::new(ev::FOCUS),
+        D::Blur(_) => EventOut::new(ev::BLUR),
+        D::Scroll(s) => EventOut::new(ev::SCROLL)
+            .f32_at(0, s.scroll_left as f32)
+            .f32_at(4, s.scroll_top as f32),
+        // Mouse*/Touch* are legacy duplicates of the Pointer* stream; Ime,
+        // FocusIn/Out and Apple keybindings are not forwarded in v1.
+        _ => return None,
+    })
 }
 
 impl GuestRuntime {
@@ -416,24 +623,42 @@ impl GuestRuntime {
         Ok(())
     }
 
-    /// Write one click record into the event region and deliver it.
-    pub fn deliver_click(&mut self, target: u32, listener: u32, x: f32, y: f32) -> Result<u32> {
+    /// Write one event record into the event region and deliver it.
+    /// Returns the guest's response flags (bit0 prevent_default, bit1 stop_propagation).
+    pub fn deliver_event(
+        &mut self,
+        eo: &EventOut,
+        flags: u16,
+        target: u32,
+        listener: u32,
+    ) -> Result<u32> {
         let (ptr, cap) = self.shared.lock().unwrap().event_region;
-        if cap < 44 {
-            bail!("event region too small");
+        let text = eo.text.as_deref().unwrap_or("").as_bytes();
+        let padded = (text.len() + 3) & !3;
+        let total = 40 + padded;
+        if (cap as usize) < total {
+            bail!("event region too small ({cap} < {total})");
         }
-        let mut rec = [0u8; 40];
-        rec[0..2].copy_from_slice(&ev::CLICK.to_le_bytes()); // kind
-        // flags u16 @2 = 0
+        let mut rec = vec![0u8; total];
+        rec[0..2].copy_from_slice(&eo.kind.to_le_bytes());
+        rec[2..4].copy_from_slice(&flags.to_le_bytes());
         rec[4..8].copy_from_slice(&target.to_le_bytes());
         rec[8..12].copy_from_slice(&listener.to_le_bytes());
         let ts = self.started_at.elapsed().as_secs_f64() * 1000.0;
         rec[12..20].copy_from_slice(&ts.to_le_bytes());
-        rec[20..24].copy_from_slice(&x.to_le_bytes());
-        rec[24..28].copy_from_slice(&y.to_le_bytes());
-        // buttons/mods/detail @28..34 = 0; str_len @36 = 0
+        rec[20..36].copy_from_slice(&eo.payload);
+        rec[36..40].copy_from_slice(&(text.len() as u32).to_le_bytes());
+        rec[40..40 + text.len()].copy_from_slice(text);
         self.memory.write(&mut self.store, ptr as usize, &rec)?;
-        let flags = self.fn_events.call(&mut self.store, 1)?;
-        Ok(flags)
+        let out = self.fn_events.call(&mut self.store, 1)?;
+        Ok(out)
+    }
+
+    /// Deliver an animation frame tick if the guest exports gwb_frame.
+    pub fn deliver_frame(&mut self, dt_ms: f32) -> Result<()> {
+        if let Some(f) = &self.fn_frame {
+            f.call(&mut self.store, dt_ms)?;
+        }
+        Ok(())
     }
 }

@@ -9,3 +9,6 @@ func hostSubmit(buf []byte) uint32 { _ = buf; return 0 }
 
 // Log is a no-op outside wasip1.
 func Log(level uint32, msg string) { _, _ = level, msg }
+
+// RequestFrame is a no-op outside wasip1.
+func RequestFrame() {}
