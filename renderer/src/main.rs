@@ -13,6 +13,7 @@
 mod abi;
 mod guest;
 mod logger;
+mod script;
 mod ui;
 
 use anyhow::{Context as _, Result};
@@ -28,13 +29,18 @@ fn main() -> Result<()> {
     let log_path = logger::init()?;
     logger::install_panic_hook();
 
-    let arg = std::env::args().nth(1);
-    let crash_test = arg.as_deref() == Some("--crash-test");
-    let wasm_path = if crash_test {
-        "hello.wasm".to_string()
-    } else {
-        arg.unwrap_or_else(|| "hello.wasm".to_string())
-    };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let crash_test = args.iter().any(|a| a == "--crash-test");
+    let script_path = args
+        .iter()
+        .position(|a| a == "--script")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    let wasm_path = args
+        .iter()
+        .find(|a| !a.starts_with("--") && Some(a.as_str()) != script_path.as_deref())
+        .cloned()
+        .unwrap_or_else(|| "hello.wasm".to_string());
     logger::log(
         "sys",
         &format!(
@@ -75,6 +81,9 @@ fn main() -> Result<()> {
     ui::host_console_line(&proxy, &format!("[host] system log: {}", log_path.display()));
     if legacy {
         spawn_guest(wasm_path, proxy.clone());
+    }
+    if let Some(path) = script_path {
+        script::run(path, proxy.clone());
     }
 
     if crash_test {

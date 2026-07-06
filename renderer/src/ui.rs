@@ -14,7 +14,8 @@ use blitz_dom::{
 };
 use blitz_html::{HtmlDocument, HtmlProvider};
 use blitz_shell::{BlitzApplication, BlitzShellEvent, WindowConfig};
-use blitz_traits::events::{DomEvent, EventState, UiEvent};
+use blitz_traits::events::{BlitzImeEvent, DomEvent, EventState, UiEvent};
+use keyboard_types::Modifiers;
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -181,6 +182,102 @@ impl GwbDocument {
                 }
             }
             Err(e) => crate::logger::log("crash", &format!("window event delivery failed: {e:#}")),
+        }
+    }
+
+    // ---- scripted-driver support ------------------------------------
+
+    fn resolve(&self, selector: &str) -> Option<usize> {
+        self.doc.query_selector(selector).ok().flatten()
+    }
+
+    /// Dispatch a synthetic click DomEvent at the selected element. Unlike a
+    /// pointer sequence this is NOT hit-tested — it reaches the element even
+    /// when scrolled out of view (deliberate: this is a test driver, and
+    /// "scroll into view first" is the app's concern, not the assertion's).
+    pub fn script_click(&mut self, selector: &str) -> bool {
+        let Some(nid) = self.resolve(selector) else { return false };
+        let Some(node) = self.doc.get_node(nid) else { return false };
+        let data = node.synthetic_click_event(Modifiers::empty());
+        let is_input = node
+            .element_data()
+            .is_some_and(|el| matches!(&*el.name.local, "input" | "textarea"));
+        let event = DomEvent::new(nid, data);
+        if self.guest.is_some() {
+            {
+                let rt = self.guest.as_mut().unwrap();
+                let handler = GwbEventHandler { rt, maps: &mut self.maps, mutated: false };
+                let mut driver = EventDriver::new(&mut self.doc, handler);
+                driver.handle_dom_event(event);
+            }
+            let shared = self.guest.as_ref().unwrap().shared.clone();
+            crate::abi::apply_batches(&mut self.doc, &mut self.maps, &shared);
+            self.dirty = true;
+            self.check_observations();
+        } else {
+            let mut driver = EventDriver::new(&mut self.doc, NoopEventHandler);
+            driver.handle_dom_event(event);
+        }
+        // The pointer-down default (focus-on-click) didn't run; emulate it so
+        // `click #input` + `type ...` composes naturally.
+        if is_input {
+            if let Some(nid) = self.resolve(selector) {
+                self.doc.set_focus_to(nid);
+            }
+        }
+        true
+    }
+
+    /// Commit text into the focused element (IME path — the real input pipeline).
+    pub fn script_type(&mut self, text: &str) {
+        self.handle_ui_event(UiEvent::Ime(BlitzImeEvent::Commit(text.to_string())));
+    }
+
+    pub fn script_focus(&mut self, selector: &str) -> bool {
+        let Some(nid) = self.resolve(selector) else { return false };
+        self.doc.set_focus_to(nid);
+        true
+    }
+
+    /// Serialize the guest mount subtree as indented pseudo-HTML.
+    pub fn dump_dom(&self, path: &str) -> std::io::Result<()> {
+        let mut out = String::new();
+        if let Some(&root) = self.maps.fwd.get(&1) {
+            self.dump_node(root, 0, &mut out);
+        }
+        std::fs::write(path, out)
+    }
+
+    fn dump_node(&self, id: usize, depth: usize, out: &mut String) {
+        let Some(node) = self.doc.get_node(id) else { return };
+        let indent = "  ".repeat(depth);
+        if let Some(el) = node.element_data() {
+            out.push_str(&indent);
+            out.push('<');
+            out.push_str(&el.name.local);
+            for attr in el.attrs.iter() {
+                out.push(' ');
+                out.push_str(&attr.name.local);
+                out.push_str("=\"");
+                out.push_str(&attr.value);
+                out.push('"');
+            }
+            out.push_str(">\n");
+            for &child in node.children.iter() {
+                self.dump_node(child, depth + 1, out);
+            }
+        } else if let Some(text) = node.text_data() {
+            let t = text.content.trim();
+            if !t.is_empty() {
+                out.push_str(&indent);
+                out.push('"');
+                out.push_str(t);
+                out.push_str("\"\n");
+            }
+        } else {
+            for &child in node.children.iter() {
+                self.dump_node(child, depth + 1, out);
+            }
         }
     }
 
@@ -448,6 +545,45 @@ impl GwbApplication {
             self.deliver(&msg);
         }
     }
+
+    fn handle_script_cmd(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        cmd: &crate::script::ScriptCmd,
+    ) {
+        use crate::script::ScriptCmd as C;
+        if let C::Quit = cmd {
+            crate::logger::log("script", "quit");
+            event_loop.exit();
+            return;
+        }
+        let Some(window) = self.inner.windows.values_mut().next() else {
+            crate::logger::log("script", "command before window exists; dropped");
+            return;
+        };
+        let doc = window.downcast_doc_mut::<GwbDocument>();
+        match cmd {
+            C::Click(sel) => {
+                let ok = doc.script_click(sel);
+                crate::logger::log("script", &format!("click {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
+            }
+            C::Type(text) => {
+                doc.script_type(text);
+                crate::logger::log("script", &format!("type \"{text}\""));
+            }
+            C::Focus(sel) => {
+                let ok = doc.script_focus(sel);
+                crate::logger::log("script", &format!("focus {sel}: {}", if ok { "ok" } else { "NO MATCH" }));
+            }
+            C::Dump(path) => match doc.dump_dom(path) {
+                Ok(()) => crate::logger::log("script", &format!("dumped DOM to {path}")),
+                Err(e) => crate::logger::log("script", &format!("dump {path} FAILED: {e}")),
+            },
+            C::Quit => unreachable!(),
+        }
+        window.poll();
+        window.request_redraw();
+    }
 }
 
 impl ApplicationHandler for GwbApplication {
@@ -541,7 +677,11 @@ impl ApplicationHandler for GwbApplication {
                                 self.deliver(&msg);
                             }
                         }
-                        Err(_other) => { /* not ours; ignore */ }
+                        Err(other) => {
+                            if let Ok(cmd) = other.downcast::<crate::script::ScriptCmd>() {
+                                self.handle_script_cmd(event_loop, &cmd);
+                            }
+                        }
                     }
                 }
                 event => self.inner.handle_blitz_shell_event(event_loop, event),

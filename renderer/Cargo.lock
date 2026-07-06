@@ -3167,11 +3167,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "anyrender_vello",
+ "atomic_refcell",
  "blitz-dom",
  "blitz-html",
  "blitz-shell",
  "blitz-traits",
  "chrono",
+ "keyboard-types 0.7.0",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",

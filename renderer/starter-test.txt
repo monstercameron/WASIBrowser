@@ -1,0 +1,11 @@
+# starter-c e2e: counter, EACH dots, hover classes, typing
+wait 400
+dump logs/dump-initial.txt
+click #increment
+click #increment
+click #increment
+dump logs/dump-clicked.txt
+click #name-input
+type " agent"
+dump logs/dump-typed.txt
+quit

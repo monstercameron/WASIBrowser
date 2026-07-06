@@ -40,10 +40,19 @@ COMPONENT(CounterPanel, CounterPanelProps, props) {
                 T("Previous count: %s", PROP(previous_count))
             ),
 
+            /* EACH: one dot per count (capped), rendered from a loop */
+            Div(
+                U(Flex, Gap(1)),
+                EACH(i, PROP(count) > 20 ? 20 : PROP(count),
+                    Span(U(TextSm, FgAmber500), "*"))
+            ),
+
             Button(
+                Id("increment"),
                 Type("button"),
                 OnClick(PROP(on_increment)),
-                U(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm, Cursor("pointer")),
+                U(RoundedXl, Px(4), Py(2), BgSlate900, FgWhite, TextSm,
+                  Cursor("pointer"), Hover(BgSlate700)),
                 "Increment"
             )
         )
@@ -88,6 +97,7 @@ COMPONENT(StarterApp, StarterAppProps, props) {
                 ),
 
                 Input(
+                    Id("name-input"),
                     Type("text"),
                     Value(name),
                     OnInput(update_name),

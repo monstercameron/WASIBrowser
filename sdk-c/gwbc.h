@@ -5,20 +5,45 @@
  *   STATE / STATE_STR / SET / PREVIOUS          name-keyed state registry
  *   EVENT / EVENT_INPUT                         handlers as render-declared blocks
  *   Div/P/H1/Button/Input/... variadic macros   bare strings auto-wrap via _Generic
- *   U(...) utility tokens (Tailwind-ish)        inline-style groups
+ *   U(...) utility tokens (Tailwind-ish)        compiled to CLASSES + a stylesheet
+ *   Hover(token)                                :hover variants (classes make it possible)
+ *   EACH(i, n, node-expr)                       dynamic lists (statement expressions)
+ *   Fragment(...)                               grouping without a wrapper div
  *   T("fmt", ...)                               reactive text (mini printf: %s %d %%)
- *   WHEN / IF / Empty                           conditional rendering
+ *   WHEN / IF / Empty / Id("...")               conditionals + stable test ids
  *   GWB_APP(Root, PROPS(...))                   generates the wasm exports
  *
  * Model: immediate mode + full replace. Every event re-renders the whole tree
  * (two passes: handlers run, then a clean render) and replaces the mount's
- * children. The stress test showed 1600 ops apply in ~1ms, so this is fine
- * for demo-scale apps; reconciliation is a later framework layer.
+ * children. Utility tokens dedupe into one generated <style> sheet: the first
+ * use of a token emits a rule; after warm-up, re-renders ship class attrs only.
+ *
+ * FAILURE POLICY: capacity overruns TRAP (gwb.log + __builtin_trap) instead of
+ * silently clamping. The host logs the guest fault; the last guest:log line
+ * names the exhausted resource. Loud beats degenerate-but-passing.
  *
  * Known limitation: full replace recreates the focused <input>; the framework
  * re-focuses its successor (matched by handler id) but the caret resets to
- * position 0, so mid-render typing inserts at the front. Fix belongs to a
- * keyed reconciler or a host-side caret save/restore, not to this layer.
+ * position 0. Fix belongs to a keyed reconciler or host caret save/restore.
+ *
+ * ERROR CATALOG (macro soup produces bad diagnostics; translate here):
+ *  - "controlling expression type ... not compatible with any generic
+ *    association" inside Div(...)/P(...) etc.
+ *      => you passed something that isn't a Node or a string (e.g. a Handler,
+ *         an int, a function name without ()). Wrap text in T(...), handlers
+ *         in OnClick(...)/OnInput(...).
+ *  - "too many arguments provided to function-like macro invocation" or
+ *    GC_F33 undeclared
+ *      => an element has more than 32 children/modifiers; split with Fragment.
+ *  - "called object type 'Node' is not a function"
+ *      => missing comma between two children, e.g. P(...) Div(...).
+ *  - "use of undeclared identifier 'gwbc_use_XXX'"
+ *      => STATE's type must be i32 (or use STATE_STR); no other types yet.
+ *  - wasm-ld "undefined symbol: strlen/memcpy/memset"
+ *      => you forgot -fno-builtin (clang idiom-recognizes your loops into
+ *         libc calls that don't exist). Use scripts/build-c.cmd.
+ *  - guest trap right after a "gwbc: ... full" log line
+ *      => a capacity below was exhausted; raise the cap.
  */
 #ifndef GWBC_H
 #define GWBC_H
@@ -28,17 +53,26 @@
 typedef signed int i32;
 typedef u32 Handler;
 
+/* ---------------------------------------------------------------- panic */
+
+static void gwbc_panic(const char *msg) {
+    gwb_log(GWB_LOG_ERROR, msg);
+    __builtin_trap();
+}
+
 /* ---------------------------------------------------------------- nodes */
 
 typedef struct { i32 idx; } Node;
 
-enum { K_EMPTY, K_ELEM, K_TEXT, K_STYLE, K_ATTR, K_HANDLER, K_GROUP };
+enum { K_EMPTY, K_ELEM, K_TEXT, K_STYLE, K_ATTR, K_HANDLER, K_GROUP, K_UTIL };
 
 typedef struct {
     u8 kind;
+    u8 variant;      /* K_UTIL: 0 = base, 1 = :hover */
     u16 ev;          /* K_HANDLER: event kind */
-    u32 a;           /* tag / prop atom / attr atom / handler id */
-    const char *s;   /* text / style value / attr value */
+    u32 a;           /* tag / style-prop atom / attr atom / handler id */
+    const char *s;   /* text / style value / attr value / K_UTIL css prop */
+    const char *s2;  /* K_UTIL css value */
     i32 first, last, next;
 } GwbcNode;
 
@@ -49,15 +83,15 @@ static char gc_strpool[48 * 1024];
 static u32 gc_strpool_len;
 
 static Node gc_alloc(u8 kind) {
-    if (gc_node_count >= GWBC_MAX_NODES) gc_node_count = GWBC_MAX_NODES - 1; /* clamp: last node overwritten */
+    if (gc_node_count >= GWBC_MAX_NODES) gwbc_panic("gwbc: node arena full (GWBC_MAX_NODES)");
     GwbcNode *n = &gc_nodes[gc_node_count];
-    n->kind = kind; n->ev = 0; n->a = 0; n->s = 0;
+    n->kind = kind; n->variant = 0; n->ev = 0; n->a = 0; n->s = 0; n->s2 = 0;
     n->first = n->last = n->next = -1;
     return (Node){ gc_node_count++ };
 }
 
 static const char *gc_strdup(const char *s, u32 len) {
-    if (gc_strpool_len + len + 1 > sizeof(gc_strpool)) return "";
+    if (gc_strpool_len + len + 1 > sizeof(gc_strpool)) gwbc_panic("gwbc: render string pool full");
     char *dst = gc_strpool + gc_strpool_len;
     for (u32 i = 0; i < len; i++) dst[i] = s[i];
     dst[len] = 0;
@@ -74,6 +108,7 @@ static Node gwbc_text(const char *s) {
 }
 static Node gwbc_pass(Node n) { return n; }
 
+/* escape hatch: inline style by well-known/dynamic atom */
 static Node gc_style(u32 prop, const char *v) {
     Node n = gc_alloc(K_STYLE);
     gc_nodes[n.idx].a = prop; gc_nodes[n.idx].s = v;
@@ -82,6 +117,11 @@ static Node gc_style(u32 prop, const char *v) {
 static Node gc_attr(u32 attr, const char *v) {
     Node n = gc_alloc(K_ATTR);
     gc_nodes[n.idx].a = attr; gc_nodes[n.idx].s = v;
+    return n;
+}
+static Node gc_u(const char *prop, const char *value) {
+    Node n = gc_alloc(K_UTIL);
+    gc_nodes[n.idx].s = prop; gc_nodes[n.idx].s2 = value;
     return n;
 }
 static void gc_append(Node parent, Node child) {
@@ -94,12 +134,25 @@ static Node gc_group2(Node a, Node b) {
     gc_append(g, a); gc_append(g, b);
     return g;
 }
+static void gc_set_variant(Node n, u8 variant) {
+    GwbcNode *nd = &gc_nodes[n.idx];
+    if (nd->kind == K_UTIL) nd->variant = variant;
+    else if (nd->kind == K_GROUP)
+        for (i32 c = nd->first; c >= 0; c = gc_nodes[c].next)
+            gc_set_variant((Node){ c }, variant);
+}
+static Node gc_hover(Node n) { gc_set_variant(n, 1); return n; }
 
 static Node gwbc_element(u32 tag, const Node *items, u32 n) {
     Node el = gc_alloc(K_ELEM);
     gc_nodes[el.idx].a = tag;
     for (u32 i = 0; i < n; i++) gc_append(el, items[i]);
     return el;
+}
+static Node gwbc_fragment(const Node *items, u32 n) {
+    Node g = gc_alloc(K_GROUP);
+    for (u32 i = 0; i < n; i++) gc_append(g, items[i]);
+    return g;
 }
 
 /* ---------------------------------------------------------------- mini fmt */
@@ -165,7 +218,7 @@ static u8 gc_streq(const char *a, const char *b) {
 static GcState *gc_slot(const char *name) {
     for (u32 i = 0; i < gc_state_count; i++)
         if (gc_streq(gc_state[i].name, name)) return &gc_state[i];
-    if (gc_state_count >= 64) return &gc_state[63];
+    if (gc_state_count >= 64) gwbc_panic("gwbc: state registry full (64 slots)");
     GcState *s = &gc_state[gc_state_count++];
     s->name = name; s->kind = 0; s->v_i32 = 0; s->prev_i32 = 0; s->has_prev = 0; s->v_str[0] = 0;
     return s;
@@ -215,7 +268,7 @@ typedef struct { const char *value; } InputEvent;
 static Handler gwbc_handler(const char *name) {
     for (u32 i = 0; i < gc_handler_count; i++)
         if (gc_streq(gc_handler_names[i], name)) return i;
-    if (gc_handler_count >= 64) return 63;
+    if (gc_handler_count >= 64) gwbc_panic("gwbc: handler registry full (64)");
     gc_handler_names[gc_handler_count] = name;
     return gc_handler_count++;
 }
@@ -234,28 +287,98 @@ static Node gc_on(Handler h, u16 kind) {
 static u32 gc_hn_node[256]; static u32 gc_hn_handler[256]; static u16 gc_hn_kind[256];
 static u32 gc_hn_count;
 
+/* ---------------------------------------------------------------- utility classes */
+
+/* Persistent token -> class registry. First use of a token mints ".uN{...}"
+ * into the generated stylesheet; re-renders then ship only class attrs. */
+#define GC_MAX_CLASSES 192
+static const char *gc_cl_prop[GC_MAX_CLASSES];
+static const char *gc_cl_val[GC_MAX_CLASSES];
+static u8 gc_cl_variant[GC_MAX_CLASSES];
+static u32 gc_cl_count;
+static u8 gc_css_dirty;
+static char gc_perm[16 * 1024]; /* persistent strings (class values outlive the render arena) */
+static u32 gc_perm_len;
+
+static const char *gc_permdup(const char *s) {
+    u32 len = gwb_strlen(s);
+    if (gc_perm_len + len + 1 > sizeof(gc_perm)) gwbc_panic("gwbc: class string pool full");
+    char *dst = gc_perm + gc_perm_len;
+    for (u32 i = 0; i <= len; i++) dst[i] = s[i];
+    gc_perm_len += len + 1;
+    return dst;
+}
+
+static u32 gc_class_for(const char *prop, const char *val, u8 variant) {
+    for (u32 i = 0; i < gc_cl_count; i++)
+        if (gc_cl_variant[i] == variant && gc_streq(gc_cl_prop[i], prop) && gc_streq(gc_cl_val[i], val))
+            return i;
+    if (gc_cl_count >= GC_MAX_CLASSES) gwbc_panic("gwbc: class registry full (GC_MAX_CLASSES)");
+    gc_cl_prop[gc_cl_count] = gc_permdup(prop);
+    gc_cl_val[gc_cl_count] = gc_permdup(val);
+    gc_cl_variant[gc_cl_count] = variant;
+    gc_css_dirty = 1;
+    return gc_cl_count++;
+}
+
+static u32 gc_style_text_node; /* text node inside the generated <style> */
+
+static void gc_emit_stylesheet(void) {
+    static char css[24 * 1024];
+    u32 len = 0;
+    for (u32 i = 0; i < gc_cl_count; i++) {
+        char head[32];
+        char *p = gwb_append_str(head, ".u");
+        p = gwb_append_u32(p, i);
+        if (gc_cl_variant[i] == 1) p = gwb_append_str(p, ":hover");
+        *p = 0;
+        const char *parts[6] = { head, "{", gc_cl_prop[i], ":", gc_cl_val[i], "}" };
+        for (u32 j = 0; j < 6; j++) {
+            const char *s = parts[j];
+            while (*s) {
+                if (len + 2 >= sizeof(css)) gwbc_panic("gwbc: stylesheet buffer full");
+                css[len++] = *s++;
+            }
+        }
+    }
+    css[len] = 0;
+    gwb_set_text(gc_style_text_node, css);
+    gc_css_dirty = 0;
+}
+
 /* ---------------------------------------------------------------- emit */
 
 static u32 gc_container; /* persistent mount div; children replaced per render */
 
 static void gc_emit(i32 idx, u32 parent);
 
-static void gc_apply(i32 idx, u32 elem) {
+/* Apply one modifier/child to an element; utility tokens accumulate class
+ * names into classbuf instead of emitting per-node style ops. */
+static void gc_apply(i32 idx, u32 elem, char *classbuf, u32 *classlen) {
     GwbcNode *n = &gc_nodes[idx];
     switch (n->kind) {
+    case K_UTIL: {
+        u32 cls = gc_class_for(n->s, n->s2, n->variant);
+        char tmp[16];
+        char *p = gwb_append_str(tmp, *classlen ? " u" : "u");
+        p = gwb_append_u32(p, cls);
+        *p = 0;
+        for (char *t = tmp; *t && *classlen < 250; t++) classbuf[(*classlen)++] = *t;
+        classbuf[*classlen] = 0;
+        break;
+    }
     case K_STYLE: gwb_set_style(elem, n->a, n->s); break;
     case K_ATTR: gwb_set_attr(elem, n->a, n->s); break;
     case K_HANDLER:
         gwb_listen(elem, n->ev);
-        if (gc_hn_count < 256) {
-            gc_hn_node[gc_hn_count] = elem;
-            gc_hn_handler[gc_hn_count] = n->a;
-            gc_hn_kind[gc_hn_count] = n->ev;
-            gc_hn_count++;
-        }
+        if (gc_hn_count >= 256) gwbc_panic("gwbc: handler-node map full (256)");
+        gc_hn_node[gc_hn_count] = elem;
+        gc_hn_handler[gc_hn_count] = n->a;
+        gc_hn_kind[gc_hn_count] = n->ev;
+        gc_hn_count++;
         break;
     case K_GROUP:
-        for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_apply(c, elem);
+        for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_apply(c, elem, classbuf, classlen);
         break;
     case K_EMPTY: break;
     default: gc_emit(idx, elem); break; /* K_ELEM, K_TEXT */
@@ -270,10 +393,18 @@ static void gc_emit(i32 idx, u32 parent) {
         gwb_append_child(parent, id);
         return;
     }
+    if (n->kind == K_GROUP) { /* fragment / EACH at child position */
+        for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_emit(c, parent);
+        return;
+    }
     if (n->kind != K_ELEM) return;
     u32 id = gwb_new_id();
     gwb_create_element(id, n->a);
-    for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_apply(c, id);
+    char classbuf[256];
+    u32 classlen = 0;
+    classbuf[0] = 0;
+    for (i32 c = n->first; c >= 0; c = gc_nodes[c].next) gc_apply(c, id, classbuf, &classlen);
+    if (classlen) gwb_set_attr(id, GWB_ATTR_CLASS, classbuf);
     gwb_append_child(parent, id);
 }
 
@@ -281,9 +412,17 @@ static void gc_emit(i32 idx, u32 parent) {
 
 static Node gwb__root(void); /* generated by GWB_APP */
 
+static void gc_render_clean(void) {
+    gc_node_count = 0; gc_strpool_len = 0; gc_hn_count = 0;
+    Node tree = gwb__root();
+    gwb_clear(gc_container);
+    gc_emit(tree.idx, gc_container);
+    if (gc_css_dirty) gc_emit_stylesheet();
+}
+
 static void gwbc_render(void) {
-    /* Pass 1 (only when an event is active): run EVENT bodies so SETs land. */
     if (gc_active_handler != 0xFFFFFFFF) {
+        /* Pass 1: run EVENT bodies so SETs settle. Tree discarded. */
         gc_node_count = 0; gc_strpool_len = 0;
         (void)gwb__root();
         u32 refocus = gc_active_handler;
@@ -294,10 +433,7 @@ static void gwbc_render(void) {
         gc_event_value = "";
 
         /* Pass 2: clean render with settled state. */
-        gc_node_count = 0; gc_strpool_len = 0; gc_hn_count = 0;
-        Node tree = gwb__root();
-        gwb_clear(gc_container);
-        gc_emit(tree.idx, gc_container);
+        gc_render_clean();
         /* Full replace destroyed the focused input; re-focus its successor. */
         if (refocus_kind == GWB_EV_INPUT) {
             for (u32 i = 0; i < gc_hn_count; i++)
@@ -305,10 +441,7 @@ static void gwbc_render(void) {
                     gwb_focus(gc_hn_node[i]);
         }
     } else {
-        gc_node_count = 0; gc_strpool_len = 0; gc_hn_count = 0;
-        Node tree = gwb__root();
-        gwb_clear(gc_container);
-        gc_emit(tree.idx, gc_container);
+        gc_render_clean();
     }
     gwb_flush();
 }
@@ -327,12 +460,15 @@ static u32 gc_on_event(const gwb_event *e) {
 
 static void gwbc_boot(void) {
     gwb_register_event_region();
-    /* dynamic atoms used by utilities */
-    gwb_define_atom(1025, "padding-left");
-    gwb_define_atom(1026, "padding-right");
-    gwb_define_atom(1027, "padding-top");
-    gwb_define_atom(1028, "padding-bottom");
-    gwb_define_atom(1029, "max-width");
+    gwb_define_atom(1030, "style"); /* the <style> element tag */
+    /* generated stylesheet lives beside the app container */
+    u32 style_el = gwb_new_id();
+    gwb_create_element(style_el, 1030);
+    gc_style_text_node = gwb_new_id();
+    gwb_create_text(gc_style_text_node, "");
+    gwb_append_child(style_el, gc_style_text_node);
+    gwb_append_child(GWB_ROOT, style_el);
+
     gc_container = gwb_new_id();
     gwb_create_element(gc_container, GWB_DIV);
     gwb_append_child(GWB_ROOT, gc_container);
@@ -341,8 +477,11 @@ static void gwbc_boot(void) {
 
 /* ---------------------------------------------------------------- variadic map */
 
-#define GC_NARG(...) GC_NARG_(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
-#define GC_NARG_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
+#define GC_NARG(...) GC_NARG_(__VA_ARGS__, \
+    32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, \
+    16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
+#define GC_NARG_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, \
+    _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31, _32, N, ...) N
 #define GC_CAT(a, b) GC_CAT_(a, b)
 #define GC_CAT_(a, b) a##b
 
@@ -362,6 +501,22 @@ static void gwbc_boot(void) {
 #define GC_F14(F, a, ...) F(a), GC_F13(F, __VA_ARGS__)
 #define GC_F15(F, a, ...) F(a), GC_F14(F, __VA_ARGS__)
 #define GC_F16(F, a, ...) F(a), GC_F15(F, __VA_ARGS__)
+#define GC_F17(F, a, ...) F(a), GC_F16(F, __VA_ARGS__)
+#define GC_F18(F, a, ...) F(a), GC_F17(F, __VA_ARGS__)
+#define GC_F19(F, a, ...) F(a), GC_F18(F, __VA_ARGS__)
+#define GC_F20(F, a, ...) F(a), GC_F19(F, __VA_ARGS__)
+#define GC_F21(F, a, ...) F(a), GC_F20(F, __VA_ARGS__)
+#define GC_F22(F, a, ...) F(a), GC_F21(F, __VA_ARGS__)
+#define GC_F23(F, a, ...) F(a), GC_F22(F, __VA_ARGS__)
+#define GC_F24(F, a, ...) F(a), GC_F23(F, __VA_ARGS__)
+#define GC_F25(F, a, ...) F(a), GC_F24(F, __VA_ARGS__)
+#define GC_F26(F, a, ...) F(a), GC_F25(F, __VA_ARGS__)
+#define GC_F27(F, a, ...) F(a), GC_F26(F, __VA_ARGS__)
+#define GC_F28(F, a, ...) F(a), GC_F27(F, __VA_ARGS__)
+#define GC_F29(F, a, ...) F(a), GC_F28(F, __VA_ARGS__)
+#define GC_F30(F, a, ...) F(a), GC_F29(F, __VA_ARGS__)
+#define GC_F31(F, a, ...) F(a), GC_F30(F, __VA_ARGS__)
+#define GC_F32(F, a, ...) F(a), GC_F31(F, __VA_ARGS__)
 #define GC_MAP(F, ...) GC_CAT(GC_F, GC_NARG(__VA_ARGS__))(F, __VA_ARGS__)
 
 /* bare strings become text nodes; Nodes pass through */
@@ -384,6 +539,8 @@ static void gwbc_boot(void) {
 #define H3(...) GWB_ELM(GWB_H3, __VA_ARGS__)
 #define Button(...) GWB_ELM(GWB_BUTTON, __VA_ARGS__)
 #define Input(...) GWB_ELM(GWB_INPUT, __VA_ARGS__)
+#define Fragment(...) \
+    gwbc_fragment((const Node[]){ GC_MAP(GC_N, __VA_ARGS__) }, GC_NARG(__VA_ARGS__))
 
 #define COMPONENT(name, Props, props) static Node name(Props props)
 #define RETURN(node) return (node)
@@ -393,8 +550,14 @@ static void gwbc_boot(void) {
 #define WHEN(cond, node) ((cond) ? (node) : Empty())
 #define IF(cond) if (cond)
 
+/* Dynamic lists: statement-expression loop producing a fragment.
+ *   EACH(i, todo_count, WHEN(todos[i].alive, TodoRow(&todos[i]))) */
+#define EACH(var, count, body) (__extension__({ \
+    Node gc__each = gc_alloc(K_GROUP); \
+    for (i32 var = 0; var < (i32)(count); var++) gc_append(gc__each, (body)); \
+    gc__each; }))
+
 #define STATE(type, name, initial) type name = gwbc_use_##type(#name, initial)
-#define gwbc_use_i32_alias gwbc_use_i32
 #define STATE_STR(name, initial) char *name = gwbc_use_str(#name, initial)
 #define SET(name, value) _Generic((value), \
     char *: gwbc_set_str, const char *: gwbc_set_str, default: gwbc_set_i32)(#name, value)
@@ -415,36 +578,40 @@ static void gwbc_boot(void) {
 #define CSS(...) __VA_ARGS__
 
 /* attributes + handlers */
+#define Id(v) gc_attr(GWB_ATTR_ID, v)
+#define TestId(v) gc_attr(GWB_ATTR_ID, v)
 #define Type(v) gc_attr(GWB_ATTR_TYPE, v)
 #define Value(v) gc_attr(GWB_ATTR_VALUE, v)
 #define Placeholder(v) gc_attr(GWB_ATTR_PLACEHOLDER, v)
 #define OnClick(h) gc_on((h), GWB_EV_CLICK)
 #define OnInput(h) gc_on((h), GWB_EV_INPUT)
 
-/* utility tokens (Tailwind-ish, inline styles) */
-#define Block gc_style(GWB_STYLE_DISPLAY, "block")
-#define Flex gc_style(GWB_STYLE_DISPLAY, "flex")
-#define FlexCol gc_style(211, "column") /* flex-direction */
-#define ItemsCenter gc_style(212, "center")
-#define Gap(n) gc_style(GWB_STYLE_GAP, gc_rem(n))
-#define Pad(n) gc_style(GWB_STYLE_PADDING, gc_rem(n))
-#define Px(n) gc_group2(gc_style(1025, gc_rem(n)), gc_style(1026, gc_rem(n)))
-#define Py(n) gc_group2(gc_style(1027, gc_rem(n)), gc_style(1028, gc_rem(n)))
-#define WFull gc_style(GWB_STYLE_WIDTH, "100%")
-#define MaxW(n) gc_style(1029, gc_rem(n))
-#define Rounded gc_style(GWB_STYLE_BORDER_RADIUS, "0.25rem")
-#define RoundedLg gc_style(GWB_STYLE_BORDER_RADIUS, "0.5rem")
-#define RoundedXl gc_style(GWB_STYLE_BORDER_RADIUS, "0.75rem")
-#define TextXs gc_style(GWB_STYLE_FONT_SIZE, "0.75rem")
-#define TextSm gc_style(GWB_STYLE_FONT_SIZE, "0.875rem")
-#define TextLg gc_style(GWB_STYLE_FONT_SIZE, "1.125rem")
-#define Text4xl gc_style(GWB_STYLE_FONT_SIZE, "2.25rem")
-#define FontSemibold gc_style(209, "600") /* font-weight */
-#define FontBold gc_style(209, "700")
-#define Cursor(v) gc_style(GWB_STYLE_CURSOR, v)
-#define Bg(hex) gc_style(GWB_STYLE_BACKGROUND, hex)
-#define Fg(hex) gc_style(GWB_STYLE_COLOR, hex)
-#define Border1(hex) gc_style(207, hex) /* border shorthand value like "1px solid #..." */
+/* utility tokens (Tailwind-ish) — compiled to classes + one <style> sheet */
+#define Hover(token) gc_hover(token)
+#define Block gc_u("display", "block")
+#define Flex gc_u("display", "flex")
+#define FlexCol gc_u("flex-direction", "column")
+#define ItemsCenter gc_u("align-items", "center")
+#define JustifyBetween gc_u("justify-content", "space-between")
+#define Gap(n) gc_u("gap", gc_rem(n))
+#define Pad(n) gc_u("padding", gc_rem(n))
+#define Px(n) gc_group2(gc_u("padding-left", gc_rem(n)), gc_u("padding-right", gc_rem(n)))
+#define Py(n) gc_group2(gc_u("padding-top", gc_rem(n)), gc_u("padding-bottom", gc_rem(n)))
+#define WFull gc_u("width", "100%")
+#define MaxW(n) gc_u("max-width", gc_rem(n))
+#define Rounded gc_u("border-radius", "0.25rem")
+#define RoundedLg gc_u("border-radius", "0.5rem")
+#define RoundedXl gc_u("border-radius", "0.75rem")
+#define TextXs gc_u("font-size", "0.75rem")
+#define TextSm gc_u("font-size", "0.875rem")
+#define TextLg gc_u("font-size", "1.125rem")
+#define Text4xl gc_u("font-size", "2.25rem")
+#define FontSemibold gc_u("font-weight", "600")
+#define FontBold gc_u("font-weight", "700")
+#define Cursor(v) gc_u("cursor", v)
+#define Bg(hex) gc_u("background", hex)
+#define Fg(hex) gc_u("color", hex)
+#define Border1(v) gc_u("border", v)
 
 /* slate/amber palette shortcuts */
 #define BgWhite Bg("#ffffff")

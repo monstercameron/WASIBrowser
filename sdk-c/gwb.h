@@ -63,6 +63,13 @@ static void gwb_log(u32 level, const char *msg) {
     gwb_imp_log(level, (const u8 *)msg, gwb_strlen(msg));
 }
 
+/* Loud failure: log the reason, then trap (host records a guest fault).
+ * Silent clamping is agent poison — see docs/DEVX-LANGUAGES.md. */
+static void gwb_trap(const char *msg) {
+    gwb_log(GWB_LOG_ERROR, msg);
+    __builtin_trap();
+}
+
 /* ---- event region ---- */
 #define GWB_EVENT_BUF_SIZE 8192
 static u8 gwb_event_buf[GWB_EVENT_BUF_SIZE];
@@ -93,7 +100,7 @@ static f32 gwb_getf32(const u8 *p) { u32 v = gwb_get32(p); f32 f; __builtin_memc
 
 static void gwb_op(u8 code, u16 a, u32 b, u32 c, u32 d) {
     u8 *r = gwb_batch_buf + 16 + gwb_ops_len;
-    if (gwb_ops_len + 16 > GWB_OPS_CAP) return; /* full: drop (demo-grade) */
+    if (gwb_ops_len + 16 > GWB_OPS_CAP) gwb_trap("gwb: op buffer full (GWB_OPS_CAP)");
     r[0] = code; r[1] = 0;
     r[2] = (u8)a; r[3] = (u8)(a >> 8);
     gwb_put32(r + 4, b); gwb_put32(r + 8, c); gwb_put32(r + 12, d);
@@ -104,7 +111,7 @@ static void gwb_op(u8 code, u16 a, u32 b, u32 c, u32 d) {
 static u32 gwb_str(const char *s) {
     u32 len = gwb_strlen(s);
     u32 off = gwb_heap_len;
-    if (gwb_heap_len + 4 + len + 3 > GWB_HEAP_CAP) return GWB_NO_STR;
+    if (gwb_heap_len + 4 + len + 3 > GWB_HEAP_CAP) gwb_trap("gwb: string heap full (GWB_HEAP_CAP)");
     gwb_put32(gwb_heap_buf + gwb_heap_len, len);
     gwb_heap_len += 4;
     for (u32 i = 0; i < len; i++) gwb_heap_buf[gwb_heap_len++] = (u8)s[i];
