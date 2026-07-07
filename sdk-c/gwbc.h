@@ -212,6 +212,14 @@ static Arena *frameArena(void) {
     return &gc_frame;
 }
 
+/* App-facing per-render scratch allocation. This is how business logic should
+ * get throwaway arrays (e.g. parsed rows feeding map()) — it never names the
+ * arena, and the memory is freed wholesale at the next render. The arena
+ * machinery stays here in the library, not in app code.
+ *   Product *rows = renderArr(Product, n);   Thing *t = renderNew(Thing); */
+#define renderNew(T)      arenaNew(frameArena(), T)
+#define renderArr(T, n)   arenaArr(frameArena(), T, (n))
+
 static Node gwbc_text(const char *s) {
     Node n = gc_alloc(K_TEXT);
     gc_nodes[n.idx].s = s;

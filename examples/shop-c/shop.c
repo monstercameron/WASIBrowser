@@ -33,9 +33,9 @@ typedef struct {
     char id[48], name[72], category[24], image[12], blurb[200];
     i32 price, stock, featured;
 } Product;
-/* Parse helpers allocate their result arrays from the per-render frame arena
- * (gwbc frameArena()) — no fixed caps, freed wholesale each render. Each
- * returns the element count and writes the array pointer through `out`. */
+/* Parse helpers allocate their result arrays with the library's per-render
+ * scratch allocator (renderArr) — no fixed caps, freed wholesale each render,
+ * no arena plumbing in app code. Each returns the count + array ptr via `out`. */
 static i32 js_arr_len(const char *arr) {
     i32 n = 0;
     for (const char *e = js_arr_first(arr); e; e = js_arr_next(e)) n++;
@@ -55,7 +55,7 @@ static void read_product(const char *e, Product *p) {
 static i32 parse_products(const char *json, Product **out) {
     const char *arr = js_find(json, "products");
     i32 n = js_arr_len(arr), i = 0;
-    Product *ps = arenaArr(frameArena(), Product, n);
+    Product *ps = renderArr(Product, n);
     for (const char *e = js_arr_first(arr); e && i < n; e = js_arr_next(e))
         read_product(e, &ps[i++]);
     *out = ps;
@@ -67,7 +67,7 @@ static i32 parse_cart(const char *json, CartLine **out, i32 *subtotal) {
     *subtotal = js_get_int(json, "subtotal");
     const char *items = js_find(json, "items");
     i32 n = js_arr_len(items), i = 0;
-    CartLine *ls = arenaArr(frameArena(), CartLine, n);
+    CartLine *ls = renderArr(CartLine, n);
     for (const char *e = js_arr_first(items); e && i < n; e = js_arr_next(e)) {
         CartLine *l = &ls[i++];
         const char *prod = js_find(e, "product");
@@ -87,7 +87,7 @@ static i32 parse_orders(const char *json, AdminOrder **out, i32 *total) {
     *total = 0;
     const char *arr = js_find(json, "orders");
     i32 n = js_arr_len(arr), i = 0;
-    AdminOrder *os = arenaArr(frameArena(), AdminOrder, n);
+    AdminOrder *os = renderArr(AdminOrder, n);
     for (const char *e = js_arr_first(arr); e && i < n; e = js_arr_next(e)) {
         AdminOrder *o = &os[i++];
         js_get_str(e, "id", o->id, sizeof o->id);
