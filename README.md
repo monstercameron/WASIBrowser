@@ -46,7 +46,7 @@ flowchart TB
         direction TB
         SUBMIT["gwb.submit(batch)<br/>16-byte op records + string heap<br/>names = u32 atoms"]
         EVENTS["gwb_events(count)<br/>40-byte records in a guest-registered<br/>event region"]
-        IMPORTS["imports: log · fetch ·<br/>request_frame · event_region"]
+        IMPORTS["imports: log · fetch · <b>rpc_call</b> ·<br/>request_frame · event_region · session_set"]
         EXPORTS["exports: gwb_start ·<br/>gwb_events · gwb_frame"]
     end
 
@@ -57,6 +57,8 @@ flowchart TB
         SHELL["ShellEventHandler<br/>chrome first, then guest routing"]
         CHROME["window chrome<br/>toolbar · drag-resizable console"]
         NET["fetch thread (ureq)<br/>NET_RESULT events"]
+        RPC["RPC thread — signs each call<br/>(ed25519) → RPC_RESULT events"]
+        RESOLVE["manifest resolver<br/>web://name → bundle + service registry"]
         SCRIPT["--script driver<br/>click/type/hover/key/wheel/dump"]
         LOGS["system log · crash black-box"]
         subgraph ENGINE["Blitz (vendored, gwb-perf branch)"]
@@ -69,12 +71,23 @@ flowchart TB
         WINIT["winit event loop<br/>vsync-paced frame pump"]
     end
 
+    subgraph SERVICE["service — any language (Go reference server)"]
+        SVC["RPC method table<br/>iface → method → handler"]
+        AUTHN["authn: verify ed25519 sig<br/>(channel identity, replay window)"]
+        AUTHZ["authz: one guard per method<br/>public · user · admin"]
+        AUTHN --> AUTHZ --> SVC
+    end
+
     CH -- "one crossing per frame" --> SUBMIT
     SUBMIT --> DEC --> DOM
     WINIT -- "pointer / key / IME" --> SHELL
     SHELL -- "hit-tested, bubbled" --> EVENTS
     EVENTS --> APP
     NET -- "async completions" --> EVENTS
+    RPC -- "signed {iface,method,payload}<br/>(local-dev: HTTP; native: QUIC/Noise)" --> AUTHN
+    SVC -- "reply → RPC_RESULT" --> RPC
+    RPC -- "async completions" --> EVENTS
+    RESOLVE -. "granted services (capabilities)" .-> RPC
     SCRIPT -- "synthetic DomEvents" --> SHELL
     WT --- CH
     VELLO --> WINIT
@@ -136,6 +149,10 @@ or even a call boundary is a latency lie; the ABI simply doesn't have one.
 **Async — the host owns the event loop.** `gwb.fetch(url)` returns a request
 id; completion arrives later as a `NET_RESULT` event (status + body). A
 freestanding wasm guest has no sockets and no threads — and doesn't need them.
+The same pattern carries **RPC**: `gwb.rpc_call(service, iface, method, payload)`
+returns a `req_id` and the reply lands as an `RPC_RESULT` event — the host
+signs, routes, and verifies the call so the guest stays sandboxed (see the
+interconnect section).
 
 **Frames.** `request_frame` → one `gwb_frame(dt)` callback, paced by the
 vsync redraw stream (a naive poll-loop self-feed spins at 0 ms; don't).
@@ -191,8 +208,10 @@ What that header actually delivers (all verified by scripted golden tests):
   props; context (`context`/`provider`/`useContext`) without prop drilling.
 - **Hooks** — `stateI32/Str/Bool/Enum/Struct`, `previousI32`, `useEffect`
   (after-commit, keyed, deps fingerprints, cleanups), `useQuery` with
-  **stale-while-revalidate** over `gwb.fetch`, `memoI32/Str`, atoms
-  (`useAtom`/`setAtom` shared state), `keyedId` refs.
+  **stale-while-revalidate** over `gwb.fetch`, **`useRpc`/`gwbc_rpc`**
+  (authenticated host-mediated RPC — see the interconnect section below),
+  `memoI32/Str`, atoms (`useAtom`/`setAtom` shared state), `keyedId` refs, and
+  **`renderArr`/`renderNew`** per-render arena allocation (growing, no `malloc`).
 - **An identity reconciler** — `keyed()` / auto-keyed `mapKeyed` rows reuse
   host nodes across full re-renders, so a focused `<input>` keeps its caret
   through unrelated updates. No fiber, no diffing — identity only, and it's
@@ -224,6 +243,88 @@ the safety work, and pay no JS tax on the way to the screen. The Go SDK
 level: all three bindings emit **byte-identical** traffic for the same UI
 (the tri-language todo in `examples/todo-go|rs|c` — Go 2.7 MB, Rust 98 KB,
 C 16 KB).
+
+---
+
+## Client ↔ service: the RPC interconnect (WebNext §4)
+
+A page that only draws is half a platform. The [WebNext plan](docs/00-WEBNEXT-OVERVIEW.md)
+argues (§4) that apps should speak **RPC to services**, not fetch documents from
+URLs — and the browser host, not the guest, owns the transport (same law as
+`fetch`: a freestanding wasm guest has no sockets). `docs/04-WEB-RPC.md` is the
+spec; this repo now carries a **working, end-to-end implementation** of it,
+exercised by a full storefront demo.
+
+**The shape.** One new host import, `gwb.rpc_call(service, iface, method,
+payload) → req_id`, mirroring `fetch` exactly: the host does the work on a
+background thread and delivers the reply later as an `RPC_RESULT` event
+(kind 41), correlated by `req_id`. The guest never touches a socket — it asks a
+*service* to run a *method*.
+
+**Capability security, not ambient authority.** A guest may call only the
+services its **manifest** declares. `renderer.exe web://shop.local` resolves an
+app manifest → the bundle wasm **plus a service registry** (which `ed:` services
+it may call, at which endpoints). `rpc_call`'s `service` argument indexes that
+registry; an undeclared name is rejected *before any network*. This is the
+spec's "the wasm import list is the permission manifest," extended to the
+network — and it replaces the old hardcoded `.wasm` path with real `web://`
+navigation.
+
+**Authn is the channel; authz is one guard** (§3 of the RPC spec):
+- **Channel authn** — the host holds an app-scoped **ed25519** key and signs
+  *every* request over canonical bytes (`iface\nmethod\nreq_id\nts\nsha256(body)`);
+  the server verifies the signature and rejects stale timestamps (replay
+  window). Cryptographic caller identity, no session to steal — the spec's
+  central claim, running.
+- **User authn + authz** — `auth.login` returns a server-signed capability
+  token; the guest stashes it via a `session_set` host import (so the host never
+  parses bodies), and each method has exactly one guard: `can(principal,
+  method)` — public catalog, authenticated cart/checkout, admin-only inventory.
+
+**The demo — `examples/shop-c` + `server/`.** *Aurelia*, a clothing/accessories
+storefront: catalog grid with working category filters, product detail, cart,
+login, checkout, order confirmation, and an admin orders view — every screen
+driven by authenticated RPC to a **plain Go server** (stdlib only:
+`crypto/ed25519`, `crypto/pbkdf2`). Nine Go unit tests cover the auth matrix
+(signed-OK; unsigned / replayed / tampered → 401; authz tiers), and a scripted
+e2e drives the whole purchase flow through the real UI: browse → login → add →
+checkout → order placed. A **reactified-C** client talking to a Go backend, with
+identical wire semantics whether the local-dev binding is HTTP or the eventual
+native QUIC/Noise.
+
+**Framework support (`gwbc.h`).** The reactive layer gained the RPC surface so
+components never touch raw records:
+- `useRpc(key, service, iface, method, payload)` — a declarative, cached read
+  that re-renders on completion (React-Query-shaped, like `useQuery` but RPC).
+- `gwbc_rpc(..., cb)` — an imperative mutation with a completion callback (login,
+  checkout), plus `invalidate(key)`.
+- `sdk-c/gwbjson.h` — a tiny freestanding JSON reader for consuming replies.
+- **Zig-style arenas** — `renderArr(T, n)` / `renderNew(T)` allocate per-render
+  scratch (parsed rows feeding `map()`) from a **growing** frame arena that
+  extends linear memory via `memory.grow` instead of trapping, freed wholesale
+  each render. No GC, no `malloc`, no fixed caps in app code.
+
+**Findings — what building it taught us, and fed back into the spec:**
+- **The local-dev HTTP binding is isomorphic to the native wire.** `{iface,
+  method, id, payload}` + a signed caller identity + a per-method authz guard is
+  the same envelope whether the pipe is HTTP (the spec's declared dev ramp) or
+  QUIC/Noise (P3). The storefront and Go handlers are unchanged when the
+  transport swaps — the spec's forward-compat claim, confirmed in code.
+- **RPC really is just `fetch` with identity + correlation.** The client
+  transport reused the existing async-fetch machinery; the delta was one import,
+  one event kind, and the auth headers. "RPC is a first-class ABI primitive, not
+  a library" held.
+- **Capability-scoped services delete a class of bugs.** Because the service
+  list is fixed at load from the manifest, "call an undeclared endpoint" fails
+  deterministically in the host with zero network I/O.
+- **Real interactive apps stress the engine harder than demos.** Typing into
+  RPC-backed inputs and hovering product grids exposed **four stale-node-id
+  crashes** in Blitz's hover/input/layout paths (full-replace re-render racing
+  the engine's snapshot caches); all fixed on the `gwb-perf` branch — bugs the
+  task-dashboard never reached.
+- **One real framework bug, kept honest:** `useRpc` keyed with an *arena* string
+  aliased reused memory and silently served stale data (category filters did
+  nothing); the cache now copies keys. "It renders" ≠ "it's correct."
 
 ---
 
@@ -269,19 +370,25 @@ Identical DOM workloads: C guest on the GWB ABI vs **vanilla JS** in Chromium.
 
 ## Layout
 
-- `docs/` — **ABI.md** (the wire contract — start here), SDK.md (two-tier
-  design), DEVX-LANGUAGES.md (Go/Rust/C authoring compared, for humans and
-  agents), BENCHMARKS.md.
-- `renderer/` — the browser: Blitz window + wasmtime host + GWB ABI + window
-  chrome + console + logging + `--script` test driver. Golden test scripts
-  (`*-test.txt`) live here too.
-- `sdk-c/gwb.h` — low-level C binding (freestanding, `-fno-builtin`).
-- `sdk-c/gwbc.h` — the reactified-C component layer; `sdk-c/gwbc-tw.h` — the
-  typed Tailwind plugin.
+- `docs/` — **ABI.md** (the wire contract — start here), **04-WEB-RPC.md** (the
+  RPC/auth/manifest spec), **00-WEBNEXT-OVERVIEW.md** (the WebNext research plan),
+  SDK.md, DEVX-LANGUAGES.md (Go/Rust/C authoring compared), BENCHMARKS.md.
+- `renderer/` — the browser: Blitz window + wasmtime host + GWB ABI + `web://`
+  manifest resolver + signed-RPC thread + window chrome + console + logging +
+  `--script` test driver. Golden test scripts (`*-test.txt`) live here too.
+- `server/` — the reference **RPC service** (Go, stdlib): method table, ed25519
+  channel authn, PBKDF2 login + server-signed sessions, per-method authz, and
+  the storefront handlers + unit tests.
+- `manifests/` — app manifests (`web://name` → bundle + granted services).
+- `sdk-c/gwb.h` — low-level C binding (freestanding, `-fno-builtin`);
+  `sdk-c/gwbjson.h` — freestanding JSON reader for RPC replies.
+- `sdk-c/gwbc.h` — the reactified-C component layer (hooks, RPC, arenas);
+  `sdk-c/gwbc-tw.h` — the typed Tailwind plugin.
 - `sdk/gwb` (Go) · `sdk-rust/` — the other two low-level bindings.
 - `examples/` — `hello`, `click` (raw ABI events/anim), `todo-go|rs|c`
   (tri-language wire-identity proof), `starter-c`, `task-dashboard-c`
-  (the component-model flagship), `bench-c`.
+  (the component-model flagship), **`shop-c`** (the authenticated-RPC storefront),
+  `rpc-smoke-c`, `bench-c`.
 - Legacy Go spine (`protocol/`, `engine/`, `host/`, `tab/`, `window/`,
   `session/`, `cmd/`) — the original wazero reference host of ABI v0; kept as
   spec + tests, superseded at runtime by the renderer.
@@ -302,6 +409,13 @@ $env:GOOS="wasip1"; $env:GOARCH="wasm"; go build -buildmode=c-shared -o renderer
 cd renderer; .\target\release\renderer.exe dashboard-c.wasm
 # Headless-ish e2e (golden dumps + log assertions):
 #   .\target\release\renderer.exe dashboard-c.wasm --script dashboard-test.txt
+
+# Storefront: reactified-C client + Go RPC server, navigated by manifest
+go build -o server\shop-server.exe .\server; .\server\shop-server.exe          # backend on :8787
+scripts\build-c.cmd examples\shop-c renderer\shop.wasm                          # client wasm
+cd renderer; .\target\release\renderer.exe web://shop.local --manifest-root ..\manifests
+#   demo accounts: shopper@aurelia.dev / shop1234 · admin@aurelia.dev / admin1234
+#   go test .\server\           # 9 auth/authz unit tests
 ```
 
 ## Status
@@ -313,9 +427,18 @@ cd renderer; .\target\release\renderer.exe dashboard-c.wasm
 - [x] gwbc.h: components, hooks (state/effects/context/query-SWR/atoms/memo),
   keyed identity reconciliation with caret preservation, typed event payloads
 - [x] gwbc-tw.h: typed Tailwind (palette/spacing/typography/shadows) + Preflight
+- [x] **RPC interconnect (WebNext §4)**: host-mediated `rpc_call`/`RPC_RESULT`,
+  ed25519 channel authn + login/session + per-method authz, `web://` manifest
+  navigation with capability-scoped services (undeclared calls rejected pre-network)
+- [x] **gwbc RPC + arenas**: `useRpc`/`gwbc_rpc`, growing per-render `renderArr`
+  arenas, `gwbjson.h`; **Go reference service** + storefront demo + 9 auth unit
+  tests + full-flow e2e
 - [x] Window chrome: toolbar view options, drag-resizable overflow-scrolling console
 - [x] Scripted driver (click/type/hover/key/wheel/dump) + golden tests + crash black-box
 - [x] Benchmarks vs Chromium + engine perf/robustness patches on `gwb-perf`
-- [ ] Go/Rust SDK parity for fetch + the extended event surface
+  (incl. 4 hover/input stale-id crash fixes surfaced by the storefront)
+- [ ] Go/Rust SDK parity for fetch/RPC + the extended event surface
+- [ ] Native RPC transport (QUIC/Noise) + `b3:` bundle verification (dev loads
+  unverified filesystem bundles today); server-key pinning in the handshake
 - [ ] Nested keyed scopes, stale-attr removal on reuse, portals/error boundaries
-- [ ] wasmtime module cache, workers, capability-gated net module
+- [ ] wasmtime module cache, workers, capability-gated `fetch`
