@@ -62,6 +62,16 @@ enum {
 /* rpc_call flags (header word). */
 enum { GWB_RPC_F_CBOR = 1, GWB_RPC_F_SESSION = 2 };
 
+/* navigate flags. */
+enum { GWB_NAV_F_NEW_TAB = 1 };
+
+/* navigate return codes. */
+enum {
+    GWB_NAV_OK = 0,          /* accepted; host acts on it (fire-and-forget) */
+    GWB_NAV_UNDECLARED = 1,  /* target isn't in this app's manifest "links" */
+    GWB_NAV_NO_GESTURE = 2,  /* called outside a genuine click/key dispatch */
+};
+
 enum { GWB_LOG_DEBUG = 0, GWB_LOG_INFO = 1, GWB_LOG_WARN = 2, GWB_LOG_ERROR = 3 };
 
 #define GWB_NO_STR 0xFFFFFFFFu
@@ -78,6 +88,7 @@ GWB_IMPORT("fetch") extern u32 gwb_imp_fetch(const u8 *ptr, u32 len);
 GWB_IMPORT("rpc_call") extern u32 gwb_imp_rpc_call(const u8 *ptr, u32 len);
 GWB_IMPORT("session_set") extern void gwb_imp_session_set(const u8 *ptr, u32 len);
 GWB_IMPORT("session_clear") extern void gwb_imp_session_clear(void);
+GWB_IMPORT("navigate") extern u32 gwb_imp_navigate(const u8 *ptr, u32 len, u32 flags);
 
 #define GWB_EXPORT(name) __attribute__((export_name(name)))
 
@@ -138,6 +149,16 @@ static void gwb_session_set(const char *token) {
     gwb_imp_session_set((const u8 *)token, gwb_strlen(token));
 }
 static void gwb_session_clear(void) { gwb_imp_session_clear(); }
+
+/* Request a cross-site navigation — a web://name address, exactly like what
+ * a human would type in the address bar. Host-mediated and capability-scoped:
+ * target must be in this app's manifest "links" array, and this must be
+ * called from a genuine click/key dispatch (never gwb_frame or an async
+ * rpc/fetch completion) or the host rejects it (GWB_NAV_*). `flags`:
+ * GWB_NAV_F_NEW_TAB opens a new tab instead of navigating this one. */
+static u32 gwb_navigate(const char *target, u32 flags) {
+    return gwb_imp_navigate((const u8 *)target, gwb_strlen(target), flags);
+}
 
 /* ---- event region ---- */
 #ifndef GWB_EVENT_BUF_SIZE

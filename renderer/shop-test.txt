@@ -1,0 +1,3 @@
+wait 2000
+dump logs/shop-dom.txt
+quit

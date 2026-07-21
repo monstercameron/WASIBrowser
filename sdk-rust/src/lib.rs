@@ -28,6 +28,7 @@ pub mod atom {
     pub const STYLE_HEIGHT: u32 = 204;
     pub const STYLE_MARGIN: u32 = 205;
     pub const STYLE_PADDING: u32 = 206;
+    pub const STYLE_BORDER: u32 = 207;
     pub const STYLE_FONT_SIZE: u32 = 208;
     pub const STYLE_GAP: u32 = 210;
     pub const STYLE_BORDER_RADIUS: u32 = 214;
@@ -52,7 +53,45 @@ pub mod ev {
     pub const SCROLL: u16 = 17;
     pub const WINDOW_RESIZE: u16 = 18;
     pub const THEME_CHANGE: u16 = 19;
+    /// Delivered once to the mount root after the initial batches apply.
+    /// Payload = {w f32, h f32, scale f32} (same layout as WINDOW_RESIZE).
+    pub const PAGE_LOAD: u16 = 22;
     pub const OBSERVED_LAYOUT: u16 = 32;
+    /// Async fetch completion; target = request id. See `fetch`.
+    pub const NET_RESULT: u16 = 40;
+    /// Host-mediated RPC completion (docs/04-WEB-RPC.md); correlate by
+    /// `Event::rpc_req_id`. See `rpc_call`.
+    pub const RPC_RESULT: u16 = 41;
+}
+
+/// RPC error classes (`Event::rpc_err_class` when `!rpc_ok`). See
+/// docs/04-WEB-RPC.md §1.
+pub mod rpc_err {
+    pub const NONE: u8 = 0;
+    pub const TRANSPORT: u8 = 1;
+    pub const AUTHN: u8 = 2;
+    pub const AUTHZ: u8 = 3;
+    pub const NOTFOUND: u8 = 4;
+    pub const BADREQ: u8 = 5;
+    pub const SERVER: u8 = 6;
+}
+
+/// `rpc_call` flags (header word).
+pub const RPC_F_CBOR: u16 = 1;
+pub const RPC_F_SESSION: u16 = 2;
+
+/// `navigate` flags.
+pub const NAV_F_NEW_TAB: u32 = 1;
+
+/// `navigate` return codes.
+pub mod nav_err {
+    /// Accepted — the host will act on it (see `ev::PAGE_LOAD` on the
+    /// resulting tab for confirmation; navigate() itself is fire-and-forget).
+    pub const OK: u32 = 0;
+    /// `target` isn't in this app's manifest-declared `links` capability.
+    pub const UNDECLARED: u32 = 1;
+    /// Called outside a genuine click/key dispatch (no drive-by redirects).
+    pub const NO_GESTURE: u32 = 2;
 }
 
 pub const LOG_DEBUG: u32 = 0;
@@ -68,6 +107,12 @@ unsafe extern "C" {
     fn event_region(ptr: *const u8, len: u32);
     fn log(level: u32, ptr: *const u8, len: u32);
     fn request_frame();
+    fn fetch(ptr: *const u8, len: u32) -> u32;
+    fn rpc_call(ptr: *const u8, len: u32) -> u32;
+    fn session_set(ptr: *const u8, len: u32);
+    fn session_clear();
+    #[link_name = "navigate"]
+    fn nav_call(ptr: *const u8, len: u32, flags: u32) -> u32;
 }
 
 pub fn log_line(level: u32, msg: &str) {
@@ -76,6 +121,55 @@ pub fn log_line(level: u32, msg: &str) {
 
 pub fn request_animation_frame() {
     unsafe { request_frame() }
+}
+
+/// Start an async GET; returns a request id. Completion arrives as an
+/// `ev::NET_RESULT` event (host does the HTTP on its own event loop).
+pub fn fetch_url(url: &str) -> u32 {
+    unsafe { fetch(url.as_ptr(), url.len() as u32) }
+}
+
+/// Host-mediated RPC (docs/04-WEB-RPC.md). Calls a manifest-declared
+/// `service` capability: `{iface, method, payload}`. The host resolves the
+/// endpoint, signs with the app key, and returns the reply as an
+/// `ev::RPC_RESULT` event (correlate by `Event::rpc_req_id`). `flags`:
+/// `RPC_F_SESSION` attaches the current user session. Returns the req id, or
+/// 0 if the service is undeclared.
+///
+/// Wire: `service_len u16 | iface_len u16 | method_len u16 | flags u16` then
+/// `service·iface·method` (utf8) + payload bytes — matches sdk-c/gwb.h and
+/// the Go SDK byte-for-byte.
+pub fn rpc(service: &str, iface: &str, method: &str, payload: &[u8], flags: u16) -> u32 {
+    let mut buf = Vec::with_capacity(8 + service.len() + iface.len() + method.len() + payload.len());
+    buf.extend_from_slice(&(service.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&(iface.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&(method.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&flags.to_le_bytes());
+    buf.extend_from_slice(service.as_bytes());
+    buf.extend_from_slice(iface.as_bytes());
+    buf.extend_from_slice(method.as_bytes());
+    buf.extend_from_slice(payload);
+    unsafe { rpc_call(buf.as_ptr(), buf.len() as u32) }
+}
+
+/// Stash the user session token (from an auth.login reply) in the host's
+/// session slot; future `rpc()` calls with `RPC_F_SESSION` attach it.
+pub fn set_session(token: &str) {
+    unsafe { session_set(token.as_ptr(), token.len() as u32) }
+}
+
+pub fn clear_session() {
+    unsafe { session_clear() }
+}
+
+/// Request a cross-site navigation — a `web://name` address, exactly like
+/// what a human would type in the address bar. Host-mediated and capability-
+/// scoped: `target` must be in this app's manifest `"links"` array, and this
+/// must be called from a genuine click/key dispatch (never a frame tick or
+/// an async RPC/fetch completion) or the host rejects it — see `nav_err`.
+/// `flags`: `NAV_F_NEW_TAB` opens a new tab instead of navigating this one.
+pub fn navigate(target: &str, flags: u32) -> u32 {
+    unsafe { nav_call(target.as_ptr(), target.len() as u32, flags) }
 }
 
 // ---------------------------------------------------------------- ids + region
@@ -191,6 +285,17 @@ pub struct Event {
     pub mods: u16,
     pub pressed: bool,
     pub dark: bool,
+    /// NET_RESULT: HTTP status (0 = transport error).
+    pub net_status: u16,
+    pub net_ok: bool,
+    /// RPC_RESULT: HTTP status.
+    pub rpc_status: u16,
+    pub rpc_ok: bool,
+    /// RPC_RESULT: error class (see `rpc_err`), valid when `!rpc_ok`.
+    pub rpc_err_class: u8,
+    /// RPC_RESULT: the req id returned by `rpc()`. NET_RESULT carries its
+    /// request id in `target` instead (matches the wire record layout).
+    pub rpc_req_id: u32,
     pub text: String,
 }
 
@@ -237,12 +342,22 @@ pub fn decode_events(count: u32, mut f: impl FnMut(&Event) -> u32) -> u32 {
                 e.x = f32at(r, 20);
                 e.y = f32at(r, 24);
             }
-            ev::WINDOW_RESIZE => {
+            ev::WINDOW_RESIZE | ev::PAGE_LOAD => {
                 e.w = f32at(r, 20);
                 e.h = f32at(r, 24);
                 e.scale = f32at(r, 28);
             }
             ev::THEME_CHANGE => e.dark = u32at(r, 20) != 0,
+            ev::NET_RESULT => {
+                e.net_status = u16at(r, 20);
+                e.net_ok = r[22] != 0;
+            }
+            ev::RPC_RESULT => {
+                e.rpc_status = u16at(r, 20);
+                e.rpc_ok = r[22] != 0;
+                e.rpc_err_class = r[23];
+                e.rpc_req_id = u32at(r, 24);
+            }
             ev::OBSERVED_LAYOUT => {
                 e.x = f32at(r, 20);
                 e.y = f32at(r, 24);

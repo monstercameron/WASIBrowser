@@ -17,7 +17,7 @@ mod manifest;
 mod script;
 mod ui;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use winit::dpi::LogicalSize;
@@ -51,18 +51,10 @@ fn main() -> Result<()> {
         .cloned()
         .unwrap_or_else(|| "hello.wasm".to_string());
 
-    // Resolve the target into a bundle + service registry (docs/04-WEB-RPC.md §4).
-    let resolved = manifest::resolve(&target, &manifest_root)
-        .with_context(|| format!("resolving {target}"))?;
-    let wasm_path = resolved.bundle_path.clone();
-    if resolved.dev_unverified {
-        logger::log("rpc", &format!("dev: loading unverified bundle '{wasm_path}' (no b3: check)"));
-    }
     logger::log(
         "sys",
         &format!(
-            "navigating to '{target}' -> bundle={wasm_path} title=\"{}\" crash_test={crash_test} cwd={}",
-            resolved.title,
+            "starting, initial target='{target}' crash_test={crash_test} cwd={}",
             std::env::current_dir()?.display()
         ),
     );
@@ -70,25 +62,25 @@ fn main() -> Result<()> {
     let event_loop = create_default_event_loop();
     let (proxy, receiver) = BlitzShellProxy::new(event_loop.create_proxy());
 
-    let mut doc = GwbDocument::new(&wasm_path);
+    // One process-wide wasmtime Engine, shared across every tab's guest —
+    // Engines are designed to be cheaply shared across many Stores; creating
+    // one per guest (the old per-navigate behavior) wasted JIT/codegen setup.
+    let engine = wasmtime::Engine::default();
 
-    // GWB guests (export gwb_abi_version) run in-process on the UI thread;
-    // anything else falls back to legacy console mode (_start on a thread).
-    let mut legacy = false;
-    match abi::try_load(&wasm_path, proxy.clone(), resolved.services) {
-        Ok(Some(mut rt)) => {
-            rt.start(1100.0, 800.0, 1.0, 1)
-                .context("gwb_start failed")?;
-            doc.attach_guest(rt, 1100.0, 800.0, 1.0);
-        }
-        Ok(None) => legacy = true,
-        Err(e) => {
-            logger::log("crash", &format!("gwb guest load failed: {e:#}"));
-            ui::host_console_line(&proxy, &format!("[host] guest load FAILED: {e:#}"));
+    let mut doc = GwbDocument::new(engine, proxy.clone(), manifest_root.clone());
+    // navigate() resolves the manifest, loads the guest, and starts it, all
+    // inside the tab created by GwbDocument::new. If the initial target
+    // isn't a GWB guest, fall back to the legacy console-mode host (matches
+    // the original single-guest behavior) — tabs opened later to a non-GWB
+    // target are not supported (see navigate()'s Ok(None) log).
+    if !doc.navigate_active(&target) {
+        if let Ok(resolved) = manifest::resolve(&target, &manifest_root) {
+            logger::log("sys", &format!("falling back to legacy console-mode for '{target}'"));
+            spawn_guest(resolved.bundle_path, proxy.clone());
         }
     }
 
-    let win_title = format!("{} — WASIBrowser", resolved.title);
+    let win_title = "WASIBrowser".to_string();
     let attrs = WindowAttributes::default()
         .with_title(win_title)
         .with_surface_size(LogicalSize::new(1100.0, 800.0));
@@ -98,9 +90,6 @@ fn main() -> Result<()> {
     app.add_window(window);
 
     ui::host_console_line(&proxy, &format!("[host] system log: {}", log_path.display()));
-    if legacy {
-        spawn_guest(wasm_path, proxy.clone());
-    }
     if let Some(path) = script_path {
         script::run(path, proxy.clone());
     }

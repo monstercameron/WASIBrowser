@@ -13,20 +13,20 @@ const Root uint32 = 1
 
 // Well-known atoms (mirror of the host table in renderer/src/abi.rs).
 const (
-	Div      uint32 = 1
-	Span     uint32 = 2
-	P        uint32 = 3
-	H1       uint32 = 4
-	H2       uint32 = 5
-	H3       uint32 = 6
-	Button   uint32 = 7
-	Input    uint32 = 8
-	A        uint32 = 9
-	Img      uint32 = 10
-	Pre      uint32 = 26
-	Code     uint32 = 27
-	Strong   uint32 = 28
-	Em       uint32 = 29
+	Div    uint32 = 1
+	Span   uint32 = 2
+	P      uint32 = 3
+	H1     uint32 = 4
+	H2     uint32 = 5
+	H3     uint32 = 6
+	Button uint32 = 7
+	Input  uint32 = 8
+	A      uint32 = 9
+	Img    uint32 = 10
+	Pre    uint32 = 26
+	Code   uint32 = 27
+	Strong uint32 = 28
+	Em     uint32 = 29
 
 	AttrClass       uint32 = 100
 	AttrID          uint32 = 101
@@ -76,9 +76,36 @@ const (
 	EvThemeChange   uint16 = 19
 	EvContextMenu   uint16 = 20
 	EvPointerCancel uint16 = 21
+	// EvPageLoad is delivered once to the mount root after the initial
+	// batches apply. Payload = {w f32, h f32, scale f32} (same layout as
+	// EvWindowResize).
+	EvPageLoad uint16 = 22
 
 	EvObservedLayout     uint16 = 32
 	EvObservedVisibility uint16 = 33
+
+	// EvNetResult is an async fetch completion; Target = request id. See Fetch.
+	EvNetResult uint16 = 40
+	// EvRpcResult is a host-mediated RPC completion (docs/04-WEB-RPC.md);
+	// correlate by Event.RpcReqID. See Rpc.
+	EvRpcResult uint16 = 41
+)
+
+// RPC error classes (Event.RpcErrClass when !RpcOk). See docs/04-WEB-RPC.md §1.
+const (
+	RpcErrNone      uint8 = 0
+	RpcErrTransport uint8 = 1
+	RpcErrAuthn     uint8 = 2
+	RpcErrAuthz     uint8 = 3
+	RpcErrNotFound  uint8 = 4
+	RpcErrBadReq    uint8 = 5
+	RpcErrServer    uint8 = 6
+)
+
+// Rpc flags (header word).
+const (
+	RpcFCBOR    uint16 = 1
+	RpcFSession uint16 = 2
 )
 
 // Event record flags.
@@ -142,7 +169,15 @@ type Event struct {
 	Mods     uint16
 	Pressed  bool
 	Dark     bool
-	Str      string
+	// NetStatus/NetOk: EvNetResult (HTTP status, 0 = transport error).
+	NetStatus uint16
+	NetOk     bool
+	// RpcStatus/RpcOk/RpcErrClass/RpcReqID: EvRpcResult.
+	RpcStatus   uint16
+	RpcOk       bool
+	RpcErrClass uint8
+	RpcReqID    uint32
+	Str         string
 }
 
 // Preventable reports whether the host is waiting on this event's verdict.
@@ -262,6 +297,66 @@ func Focus(id uint32)                           { def.Focus(id) }
 // Flush submits the default batch (normally automatic).
 func Flush() { def.Submit() }
 
+// ---------------------------------------------------------------- fetch + rpc
+
+// Fetch starts an async GET; returns a request id. Completion arrives as an
+// EvNetResult event (host does the HTTP on its own event loop).
+func Fetch(url string) uint32 { return hostFetch(url) }
+
+// Rpc is host-mediated RPC (docs/04-WEB-RPC.md). It calls a manifest-declared
+// `service` capability: {iface, method, payload}. The host resolves the
+// endpoint, signs with the app key, and returns the reply as an EvRpcResult
+// event (correlate by Event.RpcReqID). `flags`: RpcFSession attaches the
+// current user session. Returns the req id, or 0 if the service is
+// undeclared.
+//
+// Wire: service_len u16 | iface_len u16 | method_len u16 | flags u16, then
+// service·iface·method (utf8) + payload bytes — matches sdk-c/gwb.h and
+// sdk-rust byte-for-byte.
+func Rpc(service, iface, method string, payload []byte, flags uint16) uint32 {
+	buf := make([]byte, 0, 8+len(service)+len(iface)+len(method)+len(payload))
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(service)))
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(iface)))
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(method)))
+	buf = binary.LittleEndian.AppendUint16(buf, flags)
+	buf = append(buf, service...)
+	buf = append(buf, iface...)
+	buf = append(buf, method...)
+	buf = append(buf, payload...)
+	return hostRpcCall(buf)
+}
+
+// SetSession stashes the user session token (from an auth.login reply) in
+// the host's session slot; future Rpc() calls with RpcFSession attach it.
+func SetSession(token string) { hostSessionSet(token) }
+
+func ClearSession() { hostSessionClear() }
+
+// Navigate flags.
+const NavFNewTab uint32 = 1
+
+// Navigate return codes.
+const (
+	// NavOK: accepted — the host will act on it (see EvPageLoad on the
+	// resulting tab for confirmation; Navigate is fire-and-forget).
+	NavOK uint32 = 0
+	// NavUndeclared: target isn't in this app's manifest-declared "links"
+	// capability.
+	NavUndeclared uint32 = 1
+	// NavNoGesture: called outside a genuine click/key dispatch (no
+	// drive-by redirects).
+	NavNoGesture uint32 = 2
+)
+
+// Navigate requests a cross-site navigation — a web://name address, exactly
+// like what a human would type in the address bar. Host-mediated and
+// capability-scoped: target must be in this app's manifest "links" array,
+// and this must be called from a genuine click/key dispatch (never a frame
+// tick or an async RPC/fetch completion) or the host rejects it (see the
+// NavOK/NavUndeclared/NavNoGesture codes above). flags: NavFNewTab opens a
+// new tab instead of navigating this one.
+func Navigate(target string, flags uint32) uint32 { return hostNavigate(target, flags) }
+
 // ---------------------------------------------------------------- dispatch
 // Called by the platform layer (platform_wasip1.go).
 
@@ -316,7 +411,7 @@ func dispatchEvents(count uint32) uint32 {
 		case EvScroll:
 			e.X = f32at(r, 20)
 			e.Y = f32at(r, 24)
-		case EvWindowResize:
+		case EvWindowResize, EvPageLoad:
 			e.W = f32at(r, 20)
 			e.H = f32at(r, 24)
 			e.Scale = f32at(r, 28)
@@ -327,6 +422,14 @@ func dispatchEvents(count uint32) uint32 {
 			e.Y = f32at(r, 24)
 			e.W = f32at(r, 28)
 			e.H = f32at(r, 32)
+		case EvNetResult:
+			e.NetStatus = binary.LittleEndian.Uint16(r[20:22])
+			e.NetOk = r[22] != 0
+		case EvRpcResult:
+			e.RpcStatus = binary.LittleEndian.Uint16(r[20:22])
+			e.RpcOk = r[22] != 0
+			e.RpcErrClass = r[23]
+			e.RpcReqID = binary.LittleEndian.Uint32(r[24:28])
 		}
 		strLen := int(binary.LittleEndian.Uint32(r[36:40]))
 		next := off + 40

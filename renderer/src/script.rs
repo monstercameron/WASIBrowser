@@ -15,6 +15,13 @@
 //!   key <name>              KeyDown to the focused element (Enter/Escape/Tab/End/Home)
 //!   wheel <selector> <dy>   Wheel at the element (negative dy = scroll up)
 //!   dump <path>             write the mount subtree as indented pseudo-HTML
+//!   navigate <target>       address-bar navigate the active tab (web://name or path.wasm)
+//!   back                    active tab's history back
+//!   forward                 active tab's history forward
+//!   reload                  reload the active tab's current target
+//!   newtab [target]         open a new tab, optionally navigating it immediately
+//!   closetab                close the active tab
+//!   switchtab <idx>         activate tab by index (0-based, creation order)
 //!   quit
 
 use std::sync::Arc;
@@ -32,6 +39,14 @@ pub enum ScriptCmd {
     Key(String),
     Wheel(String, f64),
     Dump(String),
+    DumpApp(String),
+    Navigate(String),
+    Back,
+    Forward,
+    Reload,
+    NewTab(String),
+    CloseTab,
+    SwitchTab(usize),
     Quit,
 }
 
@@ -78,6 +93,14 @@ pub fn run(path: String, proxy: BlitzShellProxy) {
                         ScriptCmd::Wheel(sel.trim().to_string(), dy.trim().parse().unwrap_or(-120.0))
                     }
                     "dump" => ScriptCmd::Dump(rest),
+                    "dumpapp" => ScriptCmd::DumpApp(rest),
+                    "navigate" => ScriptCmd::Navigate(rest),
+                    "back" => ScriptCmd::Back,
+                    "forward" => ScriptCmd::Forward,
+                    "reload" => ScriptCmd::Reload,
+                    "newtab" => ScriptCmd::NewTab(rest),
+                    "closetab" => ScriptCmd::CloseTab,
+                    "switchtab" => ScriptCmd::SwitchTab(rest.parse().unwrap_or(0)),
                     "quit" => ScriptCmd::Quit,
                     other => {
                         crate::logger::log(

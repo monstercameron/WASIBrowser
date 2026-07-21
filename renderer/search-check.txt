@@ -1,0 +1,7 @@
+wait 1200
+click #q
+type wasm dom
+click #search-btn
+wait 1000
+dump logs/search-check-dom.txt
+quit

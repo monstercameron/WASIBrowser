@@ -143,6 +143,8 @@ impl AtomEntry {
 /// A completed host-side HTTP request, shipped to the UI thread.
 pub struct NetResult {
     pub id: u32,
+    /// Which tab's guest this belongs to (routing key — see ui.rs delivery).
+    pub tab_id: u32,
     pub status: u16,
     pub ok: bool,
     pub body: String,
@@ -163,10 +165,25 @@ pub struct ServiceEntry {
 /// NetResult but carries req_id correlation + an error class (§1 of 04-WEB-RPC).
 pub struct RpcResult {
     pub req_id: u32,
+    /// Which tab's guest this belongs to (routing key — see ui.rs delivery).
+    pub tab_id: u32,
     pub status: u16,
     pub ok: bool,
     pub err_class: u8,
     pub body: String,
+}
+
+/// A guest-requested cross-site navigation, shipped to the UI thread once the
+/// capability + gesture checks pass (see the `navigate` host import below).
+/// The guest never touches tab/window state directly — same law as
+/// fetch/rpc_call: it expresses intent, the host acts.
+pub struct NavRequest {
+    /// The tab that asked (the *requesting* tab — for a new-tab open this is
+    /// where the new tab gets inserted next to; for same-tab it's the one
+    /// that navigates).
+    pub tab_id: u32,
+    pub target: String,
+    pub new_tab: bool,
 }
 
 pub struct Shared {
@@ -189,6 +206,20 @@ pub struct Shared {
     pub app_key: Arc<ed25519_dalek::SigningKey>,
     /// base64 of the app verifying (public) key — the GWB-App-Key header.
     pub app_key_b64: String,
+    /// Manifest-declared cross-site link targets (bare `web://` names, e.g.
+    /// "retailer.local") this guest may navigate to/open. Mirrors `services`'
+    /// capability model: an undeclared target is rejected pre-navigation,
+    /// same as an undeclared RPC service is rejected pre-network.
+    pub links: HashSet<String>,
+    /// True only while the host is dispatching a genuine pointer/key event to
+    /// this guest — set around that one `deliver_event` call in ui.rs. Gates
+    /// `navigate`: a guest can request navigation only in direct response to
+    /// user input, never from a frame tick or an async RPC/fetch completion
+    /// (no drive-by redirects with no user action behind them).
+    pub gesture_active: bool,
+    /// This tab's id — stamped into every NavRequest so the host routes the
+    /// request back to the correct tab (mirrors NetResult/RpcResult's tab_id).
+    pub tab_id: u32,
 }
 
 /// Well-known atoms 0..1024 (spec appendix; mirrored in sdk/gwb).
@@ -514,13 +545,22 @@ fn console(proxy: &BlitzShellProxy, source: Source, text: &str) {
 
 /// Load a wasm module. Returns Ok(None) if it doesn't export the GWB ABI
 /// (caller should fall back to legacy console mode).
+///
+/// `engine` is one process-wide `wasmtime::Engine` shared across every tab's
+/// guest (wasmtime `Engine`s are designed to be cheaply shared across many
+/// `Store`s — creating one per guest wastes JIT/codegen setup for no benefit).
+/// `tab_id` tags this guest's async fetch/rpc completions so multi-tab event
+/// delivery can route each result back to its owning tab instead of
+/// broadcasting to whichever guest happens to be active (see ui.rs).
 pub fn try_load(
+    engine: &Engine,
     path: &str,
+    tab_id: u32,
     proxy: BlitzShellProxy,
     services: HashMap<String, ServiceEntry>,
+    links: HashSet<String>,
 ) -> Result<Option<GuestRuntime>> {
-    let engine = Engine::default();
-    let module = Module::from_file(&engine, path)
+    let module = Module::from_file(engine, path)
         .map_err(|e| anyhow!("loading {path}: {e}"))?;
 
     let is_gwb = module.exports().any(|e| e.name() == "gwb_abi_version");
@@ -550,9 +590,12 @@ pub fn try_load(
         session_token: None,
         app_key,
         app_key_b64,
+        links,
+        gesture_active: false,
+        tab_id,
     }));
 
-    let mut linker: Linker<HostState> = Linker::new(&engine);
+    let mut linker: Linker<HostState> = Linker::new(engine);
     wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |s: &mut HostState| &mut s.wasi)?;
 
     linker.func_wrap(
@@ -624,7 +667,7 @@ pub fn try_load(
     linker.func_wrap(
         "gwb",
         "fetch",
-        |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| -> u32 {
+        move |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| -> u32 {
             let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
                 return 0;
             };
@@ -669,7 +712,7 @@ pub fn try_load(
                         ),
                     );
                     proxy.send_event(blitz_shell::BlitzShellEvent::Embedder(Arc::new(
-                        NetResult { id, status, ok, body },
+                        NetResult { id, tab_id, status, ok, body },
                     )));
                 })
                 .ok();
@@ -684,7 +727,7 @@ pub fn try_load(
     linker.func_wrap(
         "gwb",
         "rpc_call",
-        |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| -> u32 {
+        move |mut caller: Caller<'_, HostState>, ptr: u32, len: u32| -> u32 {
             let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
                 return 0;
             };
@@ -796,6 +839,7 @@ pub fn try_load(
                     );
                     proxy.send_event(blitz_shell::BlitzShellEvent::Embedder(Arc::new(RpcResult {
                         req_id,
+                        tab_id,
                         status,
                         ok,
                         err_class,
@@ -836,9 +880,68 @@ pub fn try_load(
         caller.data().shared.lock().unwrap().frame_requested = true;
     })?;
 
+    // Guest-requested cross-site navigation. Same law as fetch/rpc_call: the
+    // guest expresses intent, the host acts — it never touches tab/window
+    // state directly. Two gates before anything is queued:
+    //   1. Capability: `target` (bare name, e.g. "retailer.local") must be in
+    //      this app's manifest-declared `links` — an undeclared target is
+    //      rejected here, before any navigation happens (mirrors rpc_call's
+    //      undeclared-service rejection).
+    //   2. Gesture: only honored while `gesture_active` is true, i.e. while
+    //      the host is dispatching a genuine click/key event to this guest —
+    //      never from a frame tick or an async RPC/fetch completion. No
+    //      drive-by redirects with no user action behind them.
+    // Returns 0 (queued), 1 (undeclared target), or 2 (no active gesture).
+    // The actual navigation happens later on the UI thread (ui.rs's
+    // deliver_nav_request) — this call can't do it synchronously: a wasmtime
+    // host-import closure only closes over HostState, not the GwbDocument
+    // that owns the tab/mount tree.
+    linker.func_wrap(
+        "gwb",
+        "navigate",
+        |mut caller: Caller<'_, HostState>, ptr: u32, len: u32, flags: u32| -> u32 {
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                return 1;
+            };
+            let data = mem.data(&caller);
+            let (p, l) = (ptr as usize, len as usize);
+            if p + l > data.len() {
+                return 1;
+            }
+            let target = String::from_utf8_lossy(&data[p..p + l]).into_owned();
+            let bare = target.trim_start_matches("web://").to_string();
+
+            let (tab_id, proxy) = {
+                let g = caller.data().shared.lock().unwrap();
+                if !g.gesture_active {
+                    crate::logger::log(
+                        "nav",
+                        &format!("navigate REJECTED: no active user gesture (target='{target}')"),
+                    );
+                    return 2;
+                }
+                if !g.links.contains(&bare) {
+                    crate::logger::log(
+                        "nav",
+                        &format!("navigate REJECTED: undeclared link '{bare}' (capability)"),
+                    );
+                    return 1;
+                }
+                (g.tab_id, caller.data().proxy.clone())
+            };
+            crate::logger::log("nav", &format!("navigate: tab {tab_id} -> '{target}' new_tab={}", flags & 1 != 0));
+            proxy.send_event(blitz_shell::BlitzShellEvent::Embedder(Arc::new(NavRequest {
+                tab_id,
+                target,
+                new_tab: flags & 1 != 0,
+            })));
+            0
+        },
+    )?;
+
     let wasi = WasiCtxBuilder::new().inherit_stdio().build_p1();
     let mut store = Store::new(
-        &engine,
+        engine,
         HostState { wasi, shared: shared.clone(), proxy },
     );
 

@@ -1,0 +1,11 @@
+wait 1500
+click #chip-tops
+wait 800
+dump logs/rd-1-tops.txt
+click #card-merino-tee
+wait 800
+dump logs/rd-2-detail.txt
+click #detail-back
+wait 600
+dump logs/rd-3-back.txt
+quit

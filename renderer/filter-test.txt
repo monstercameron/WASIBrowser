@@ -1,0 +1,5 @@
+wait 1500
+click #chip-tops
+wait 900
+dump logs/filter-tops.txt
+quit

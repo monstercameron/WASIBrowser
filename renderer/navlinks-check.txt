@@ -1,0 +1,8 @@
+wait 1200
+click #link-search
+wait 900
+dump logs/navlinks-1-search.txt
+click #link-retailer
+wait 1200
+dumpapp logs/navlinks-2-app.txt
+quit

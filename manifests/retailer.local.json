@@ -1,0 +1,11 @@
+{
+  "name": "retailer.local",
+  "title": "circuit. — Electronics",
+  "publisher": "ed:dev-local",
+  "bundle": "retailer.wasm",
+  "services": {
+    "catalog": { "iface": "retailer.catalog.v1", "endpoint": "http://127.0.0.1:8789", "key": "ed:dev-server" },
+    "cart": { "iface": "retailer.cart.v1", "endpoint": "http://127.0.0.1:8789", "key": "ed:dev-server" }
+  },
+  "links": ["shop.local", "search.local"]
+}

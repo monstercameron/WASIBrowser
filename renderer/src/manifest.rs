@@ -6,7 +6,7 @@
 //! app can only call services the manifest declares. A bare `.wasm` path still
 //! works (back-compat): it yields a default manifest with a dev `echo` service.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, anyhow};
 
@@ -16,6 +16,10 @@ pub struct ResolvedApp {
     pub bundle_path: String,
     pub title: String,
     pub services: HashMap<String, ServiceEntry>,
+    /// Manifest-declared cross-site link targets (bare `web://` names this
+    /// app may navigate to/open a new tab for). Mirrors `services`' capability
+    /// model — the `navigate` host import rejects any target not in this set.
+    pub links: HashSet<String>,
     /// True when loaded from a filesystem bundle without b3: verification — we
     /// log this so the trust downgrade is never silent (Constitution rule 1).
     pub dev_unverified: bool,
@@ -41,6 +45,7 @@ pub fn resolve(target: &str, manifest_root: &str) -> Result<ResolvedApp> {
             bundle_path: target.to_string(),
             title: "WASIBrowser".to_string(),
             services,
+            links: HashSet::new(),
             dev_unverified: true,
         })
     }
@@ -92,10 +97,22 @@ fn resolve_manifest(name: &str, manifest_root: &str) -> Result<ResolvedApp> {
         }
     }
 
+    // Cross-site link capability (bare `web://` names, e.g. "retailer.local")
+    // this app may navigate to/open a new tab for — mirrors `services` above.
+    let mut links = HashSet::new();
+    if let Some(arr) = m.get("links").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(name) = v.as_str() {
+                links.insert(name.to_string());
+            }
+        }
+    }
+
     Ok(ResolvedApp {
         bundle_path,
         title,
         services,
+        links,
         dev_unverified: !bundle.starts_with("b3:"),
     })
 }

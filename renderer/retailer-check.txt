@@ -1,0 +1,8 @@
+wait 1200
+click #cat-audio
+wait 900
+dump logs/retailer-check-audio.txt
+click #add-anc-headphones
+wait 900
+dump logs/retailer-check-cart.txt
+quit

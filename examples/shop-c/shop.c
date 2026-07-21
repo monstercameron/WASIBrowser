@@ -155,9 +155,9 @@ static void onOrderPlaced(i32 ok, i32 ec, i32 status, const char *body, void *ud
 
 /* ---------------------------------------------------------------- styles */
 static const char *shopCss =
-    ".shop{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#211d1a;"
+    ".shop{width:100%;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#211d1a;"
     "background:#f7f4ef;min-height:100vh;-webkit-font-smoothing:antialiased}"
-    ".wrap{max-width:1160px;margin:0 auto;padding:0 28px}"
+    ".wrap{width:100%;max-width:1160px;margin:0 auto;padding:0 28px}"
     /* top bar */
     ".nav{position:sticky;top:0;z-index:20;background:rgba(247,244,239,.82);"
     "backdrop-filter:blur(14px);border-bottom:1px solid #e6ded2}"
@@ -226,7 +226,7 @@ static const char *shopCss =
     ".btn.small{padding:8px 14px;font-size:13px;border-radius:9px}"
     ".btn.block{width:100%;display:flex;justify-content:center;margin-top:10px}"
     /* detail */
-    ".detail{display:grid;grid-template-columns:5fr 6fr;gap:48px;padding:8px 0 64px;align-items:start}"
+    ".detail{width:100%;display:grid;grid-template-columns:5fr 6fr;gap:48px;padding:8px 0 64px;align-items:start}"
     ".art{min-height:480px;border-radius:18px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}"
     ".art .mono{font-size:200px}"
     ".art .glyph{position:absolute;bottom:24px;right:28px;font-size:40px;opacity:.5}"
@@ -520,11 +520,19 @@ component0(Nav) {
     event(admin)  { go(V_ADMIN); }
     event(logout) { gwb_session_clear(); setAtom(gLoggedIn, 0); setAtom(gUserName, "");
                     setAtom(gUserRole, ""); setAtom(gCartCount, 0); invalidate("cart"); go(V_CATALOG); }
+    /* Cross-site links: gwb_navigate only succeeds if "search.local"/
+     * "retailer.local" are in this app's manifest "links" array (see
+     * manifests/shop.local.json) — same capability model as rpc_call's
+     * declared services, just for navigation instead of RPC. */
+    event(toSearch)   { gwb_navigate("web://search.local", 0); }
+    event(toRetailer) { gwb_navigate("web://retailer.local", GWB_NAV_F_NEW_TAB); }
     i32 count = useAtom(gCartCount);
     return div(cls("nav"),
         div(cls("wrap"),
             span(cls("brand"), onClick(home), "AURELIA", span(cls("dot"), ".")),
             span(cls("spacer")),
+            span(cls("navlink"), id("link-search"), onClick(toSearch), "Search"),
+            span(cls("navlink"), id("link-retailer"), onClick(toRetailer), "Electronics (new tab)"),
             If(strEq(useAtom(gUserRole), "admin"),
                 span(cls("navlink"), onClick(admin), "Admin")),
             IfElse(useAtom(gLoggedIn),

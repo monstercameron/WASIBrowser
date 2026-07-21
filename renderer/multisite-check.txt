@@ -1,0 +1,7 @@
+wait 1200
+newtab web://search.local
+wait 1200
+newtab web://retailer.local
+wait 1200
+switchtab 0
+wait 600

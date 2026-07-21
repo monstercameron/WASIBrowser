@@ -1,0 +1,10 @@
+{
+  "name": "search.local",
+  "title": "wasm-search",
+  "publisher": "ed:dev-local",
+  "bundle": "search.wasm",
+  "services": {
+    "search": { "iface": "search.query.v1", "endpoint": "http://127.0.0.1:8788", "key": "ed:dev-server" }
+  },
+  "links": ["shop.local", "retailer.local"]
+}

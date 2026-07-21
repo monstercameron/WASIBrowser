@@ -1,0 +1,16 @@
+wait 400
+hover #task-row-1
+hover #task-row-2
+hover #task-row-3
+unhover #task-row-3
+hover #task-row-1
+hover #task-row-2
+unhover #task-row-2
+hover #task-row-3
+hover #task-row-1
+unhover #task-row-1
+hover #task-row-2
+hover #task-row-3
+hover #task-row-2
+hover #task-row-1
+unhover #task-row-1
