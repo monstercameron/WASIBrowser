@@ -15,6 +15,8 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+use crate::abi::LockExt;
+
 const RING_CAP: usize = 400;
 
 struct SystemLog {
@@ -68,12 +70,12 @@ pub fn log(category: &str, message: &str) {
     let Some(l) = LOG.get() else { return };
     let line = format!("{} [{:<9}] {}", timestamp(), category, message);
     {
-        let mut f = l.file.lock().unwrap();
+        let mut f = l.file.lock_ok();
         let _ = writeln!(f, "{line}");
         let _ = f.flush();
     }
     {
-        let mut r = l.ring.lock().unwrap();
+        let mut r = l.ring.lock_ok();
         r.push_back(line);
         if r.len() > RING_CAP {
             r.pop_front();
@@ -98,7 +100,7 @@ pub fn install_panic_hook() {
             let ts = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
             let path = l.dir.join(format!("crash-{ts}.log"));
             let mut body = format!("{msg}\n\nbacktrace:\n{backtrace}\n\nlast log lines:\n");
-            for line in l.ring.lock().unwrap().iter() {
+            for line in l.ring.lock_ok().iter() {
                 body.push_str(line);
                 body.push('\n');
             }

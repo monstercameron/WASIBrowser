@@ -11,9 +11,11 @@
 //!                                   after 1s to exercise crash reporting
 
 mod abi;
+mod css_scope;
 mod guest;
 mod logger;
 mod manifest;
+mod net;
 mod script;
 mod ui;
 
@@ -65,9 +67,12 @@ fn main() -> Result<()> {
     // One process-wide wasmtime Engine, shared across every tab's guest —
     // Engines are designed to be cheaply shared across many Stores; creating
     // one per guest (the old per-navigate behavior) wasted JIT/codegen setup.
-    let engine = wasmtime::Engine::default();
+    // Epoch interruption is on: every guest call runs under a CPU deadline,
+    // so an infinite loop traps instead of freezing the window.
+    let engine = abi::new_engine()?;
+    abi::spawn_epoch_ticker(engine.clone());
 
-    let mut doc = GwbDocument::new(engine, proxy.clone(), manifest_root.clone());
+    let mut doc = GwbDocument::new(engine.clone(), proxy.clone(), manifest_root.clone());
     // navigate() resolves the manifest, loads the guest, and starts it, all
     // inside the tab created by GwbDocument::new. If the initial target
     // isn't a GWB guest, fall back to the legacy console-mode host (matches
@@ -76,7 +81,7 @@ fn main() -> Result<()> {
     if !doc.navigate_active(&target) {
         if let Ok(resolved) = manifest::resolve(&target, &manifest_root) {
             logger::log("sys", &format!("falling back to legacy console-mode for '{target}'"));
-            spawn_guest(resolved.bundle_path, proxy.clone());
+            spawn_guest(engine.clone(), resolved.bundle_path, proxy.clone());
         }
     }
 

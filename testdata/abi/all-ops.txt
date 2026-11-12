@@ -1,0 +1,19 @@
+DefineAtom atom=1024 name="text-decoration"
+CreateElement id=2 tag=1
+CreateText id=3 text="héllo, wörld"
+SetAttr id=2 name=100 value="card primary"
+RemoveAttr id=2 name=101
+SetText id=3 text=""
+SetStyle id=2 prop=1024 value="line-through"
+RemoveStyle id=2 prop=201
+AppendChild parent=1 child=2
+InsertBefore child=3 before=2
+Remove id=3
+ReplaceWith old=2 new=4
+Clear id=4
+SetInnerHtml id=4 html="<b>bold</b> & \"quoted\""
+Listen id=4 kind=4
+Unlisten id=4 kind=6
+Observe id=4 what=1
+Unobserve id=4 what=1
+Focus id=4

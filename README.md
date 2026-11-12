@@ -268,7 +268,24 @@ it may call, at which endpoints). `rpc_call`'s `service` argument indexes that
 registry; an undeclared name is rejected *before any network*. This is the
 spec's "the wasm import list is the permission manifest," extended to the
 network — and it replaces the old hardcoded `.wasm` path with real `web://`
-navigation.
+navigation. Each declared service is bound to exactly one `iface`, so a guest
+can't reuse a granted endpoint for another interface, and method names are
+plain identifiers (no path, query or fragment injection). Plain `fetch` follows
+the same rule: only origins listed under the manifest's `"fetch"` key, no
+redirects, public addresses only unless the manifest names a local IP (DNS
+rebinding is checked in the connection's own resolver), and capped bodies and
+concurrency.
+
+**Guest isolation in the host** (`renderer/src/abi.rs`, `css_scope.rs`): every
+guest call runs under a CPU deadline (epoch interruption) and a 512 MiB memory
+cap, and a guest that traps is unloaded with a message instead of freezing the
+window. A guest's `<style>` never becomes a live stylesheet: the host rewrites
+it so every selector is scoped to that tab's mount, so a guest can't restyle
+or hide the tab strip or address bar. Each tab also renders inside a clipped,
+positioned wrapper, so `position: fixed` can't paint over the chrome.
+Document-level and resource tags (`script`, `link`, `title`, `base`,
+`iframe`, ...) are refused, and `SetInnerHtml` is parsed in a scratch document
+and copied across element by element, with the same filter.
 
 **Authn is the channel; authz is one guard** (§3 of the RPC spec):
 - **Channel authn** — the host holds an app-scoped **ed25519** key and signs
@@ -375,7 +392,9 @@ Identical DOM workloads: C guest on the GWB ABI vs **vanilla JS** in Chromium.
   SDK.md, DEVX-LANGUAGES.md (Go/Rust/C authoring compared), BENCHMARKS.md.
 - `renderer/` — the browser: Blitz window + wasmtime host + GWB ABI + `web://`
   manifest resolver + signed-RPC thread + window chrome + console + logging +
-  `--script` test driver. Golden test scripts (`*-test.txt`) live here too.
+  `--script` test driver. Golden test scripts live in `renderer/scripts/`.
+- `testdata/abi/` — GWB1 conformance vectors: encoded by the Go SDK
+  (`sdk/gwb/conformance_test.go`), decoded by the renderer's tests.
 - `server/` — the reference **RPC service** (Go, stdlib): method table, ed25519
   channel authn, PBKDF2 login + server-signed sessions, per-method authz, and
   the storefront handlers + unit tests.
@@ -396,26 +415,30 @@ Identical DOM workloads: C guest on the GWB ABI vs **vanilla JS** in Chromium.
 ## Build
 
 ```powershell
-# Renderer — NOTE: builds against path-deps on C:\src\blitz, branch gwb-perf
-# (local Blitz checkout carrying our performance + robustness patches).
+# Renderer — Blitz is pinned to upstream DioxusLabs/blitz@f550417 (git dep), so
+# a fresh clone builds anywhere. To use the gwb-perf fork, see renderer/README.md.
 cargo build --release --manifest-path renderer/Cargo.toml
+cargo test --manifest-path renderer/Cargo.toml   # host: decoder, limits, CSS scoping, net policy
 
 # Guests
 scripts\build-c.cmd examples\task-dashboard-c renderer\dashboard-c.wasm      # C
 cargo build --release --target wasm32-wasip1 --manifest-path examples/todo-rs/Cargo.toml
 $env:GOOS="wasip1"; $env:GOARCH="wasm"; go build -buildmode=c-shared -o renderer\todo-go.wasm ./examples/todo-go
 
-# Run
-cd renderer; .\target\release\renderer.exe dashboard-c.wasm
+# Run (the dashboard fetches a public API, so it runs via its manifest, which
+# declares that origin; a bare .wasm path gets no fetch rights unless
+# GWB_DEV_FETCH_ORIGINS lists them)
+cd renderer; .\target\release\renderer.exe web://dashboard.local --manifest-root ..\manifests
 # Headless-ish e2e (golden dumps + log assertions):
-#   .\target\release\renderer.exe dashboard-c.wasm --script dashboard-test.txt
+#   .\target\release\renderer.exe web://dashboard.local --manifest-root ..\manifests --script scripts\dashboard-test.txt
 
 # Storefront: reactified-C client + Go RPC server, navigated by manifest
 go build -o server\shop-server.exe .\server; .\server\shop-server.exe          # backend on :8787
 scripts\build-c.cmd examples\shop-c renderer\shop.wasm                          # client wasm
 cd renderer; .\target\release\renderer.exe web://shop.local --manifest-root ..\manifests
 #   demo accounts: shopper@aurelia.dev / shop1234 · admin@aurelia.dev / admin1234
-#   go test .\server\           # 9 auth/authz unit tests
+#   (seeded only when the server listens on loopback; -demo-users=false disables them)
+#   go test .\server\           # auth/authz + dev-flag unit tests
 ```
 
 ## Status
@@ -441,4 +464,8 @@ cd renderer; .\target\release\renderer.exe web://shop.local --manifest-root ..\m
 - [ ] Native RPC transport (QUIC/Noise) + `b3:` bundle verification (dev loads
   unverified filesystem bundles today); server-key pinning in the handshake
 - [ ] Nested keyed scopes, stale-attr removal on reuse, portals/error boundaries
-- [ ] wasmtime module cache, workers, capability-gated `fetch`
+- [x] Capability-gated `fetch` (manifest origins, private-address guard, caps)
+- [x] Guest isolation: CPU deadline + memory cap + unload-on-trap, scoped guest
+  CSS, clipped tab wrapper, tag denylist + sanitized innerHTML, tree-shape
+  guards (mount/cycles/stale ids), GWB1 conformance vectors + decoder fuzzing
+- [ ] wasmtime module cache, workers

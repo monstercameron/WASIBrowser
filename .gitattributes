@@ -1,0 +1,4 @@
+# Conformance vectors are byte-exact; never let line-ending conversion touch them.
+testdata/abi/*.bin binary
+testdata/abi/*.txt text eol=lf
+*.wasm binary

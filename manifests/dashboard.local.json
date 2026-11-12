@@ -1,0 +1,9 @@
+{
+  "name": "dashboard.local",
+  "title": "Task dashboard",
+  "publisher": "ed:dev-local",
+  "bundle": "dashboard-c.wasm",
+  "services": {},
+  "links": [],
+  "fetch": ["https://jsonplaceholder.typicode.com"]
+}

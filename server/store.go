@@ -90,14 +90,19 @@ func randSalt() []byte {
 	return b
 }
 
-func newStore() *store {
+// newStore builds the in-memory store. Demo accounts have well-known
+// passwords (they're in the README and the e2e scripts), so main only seeds
+// them when the server is bound to loopback.
+func newStore(demoUsers bool) *store {
 	s := &store{
 		products: map[string]*Product{},
 		users:    map[string]*User{},
 		carts:    map[string]*Cart{},
 		orders:   map[string]*Order{},
 	}
-	s.seedUsers()
+	if demoUsers {
+		s.seedUsers()
+	}
 	s.seedCatalog()
 	return s
 }

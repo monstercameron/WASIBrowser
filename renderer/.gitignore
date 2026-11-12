@@ -1,3 +1,6 @@
 /target
 /logs
 
+
+# Local Blitz checkout override (see README.md) — machine-specific
+.cargo/config.toml

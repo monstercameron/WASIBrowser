@@ -71,12 +71,12 @@ The pipeline is specified, not best-effort:
 
 | import | signature | semantics |
 |---|---|---|
-| `submit` | `(ptr: u32, len: u32) -> u32` | Decode + queue one write batch. Returns 0, or the 1-based index of the first invalid op (dev-mode diagnostics via `log`). Buffer reusable on return. |
+| `submit` | `(ptr: u32, len: u32) -> u32` | Decode + queue one write batch. Returns 0 on success; 1 if the batch is malformed (the reason goes to the system log, and the whole batch is dropped); 2 if too many ops are already queued for the UI thread (4 Mi); `0xFFFFFFFF` if `ptr..len` is outside guest memory. Buffer reusable on return. |
 | `event_region` | `(ptr: u32, len: u32)` | Register the buffer event batches are written into. Min 4 KiB. Re-registration allowed; takes effect next delivery. |
 | `log` | `(level: u32, ptr: u32, len: u32)` | Structured console line (0=debug 1=info 2=warn 3=error) → in-window console + system log. |
 | `request_frame` | `()` | One-shot: schedule `gwb_frame` at the next paint. The rAF equivalent. |
-| `fetch` | `(ptr: u32, len: u32) -> u32` | Async HTTP GET (url at ptr..len). Returns a fetch id; completion arrives as a `NET_RESULT` (kind 40) event. Host owns the socket. |
-| `rpc_call` | `(ptr: u32, len: u32) -> u32` | Async host-mediated RPC. Request buffer = `service_len u16 \| iface_len u16 \| method_len u16 \| flags u16` then `service·iface·method` (UTF-8) + payload bytes. `service` is a manifest-declared capability name (host resolves endpoint + signs with the app key), NOT a URL. Returns a `req_id`; completion arrives as an `RPC_RESULT` (kind 41) event correlated by `req_id`. Undeclared service → rejected pre-network. See `04-WEB-RPC.md`. |
+| `fetch` | `(ptr: u32, len: u32) -> u32` | Async HTTP GET (url at ptr..len). Returns a fetch id; completion arrives as a `NET_RESULT` (kind 40) event. Host owns the socket. Only origins listed in the manifest's `"fetch"` array are reachable; redirects are not followed; a name may resolve only to public addresses unless the manifest declares a loopback/private IP literal or `localhost`; bodies are capped at 8 MiB; at most 16 fetch+rpc requests are in flight per guest. A refused request still returns an id and gets a `NET_RESULT` with `ok=0, status=0` and the reason as the body. |
+| `rpc_call` | `(ptr: u32, len: u32) -> u32` | Async host-mediated RPC. Request buffer = `service_len u16 \| iface_len u16 \| method_len u16 \| flags u16` then `service·iface·method` (UTF-8) + payload bytes. `service` is a manifest-declared capability name (host resolves endpoint + signs with the app key), NOT a URL. `iface` must equal the manifest's iface for that service, and `method` must match `[A-Za-z0-9_-]{1,64}`. Returns a `req_id`; completion arrives as an `RPC_RESULT` (kind 41) event correlated by `req_id`. Undeclared service, mismatched iface, bad method name or a payload over 8 MiB → returns 0, rejected pre-network. See `04-WEB-RPC.md`. |
 
 ## Guest exports
 
@@ -98,6 +98,12 @@ one crossing per delivery, not two.)
   cannot address anything outside its mount subtree — host chrome (console, future
   tab UI) is physically unreachable. Isolation falls out of the id space.
 - Ids are never reused until `Remove`d; SDKs may recycle after removal.
+  `Remove`, `Clear` and `SetInnerHTML` forget the ids of every node they drop
+  (descendants included), so a stale id can never reach a node the engine
+  later reuses that slot for.
+- The mount (id 1) can't be removed, moved, replaced or re-created; ops that
+  try are ignored. Ops that would make a cycle (a node into its own subtree)
+  or anchor on a detached node are ignored too.
 
 ## Atoms — the string killer
 
@@ -115,8 +121,11 @@ Names (tags, attributes, style properties) travel as `u32` atoms:
   Document-level and scripting tags (html/head/meta/script/iframe/…) are
   deliberately absent: guests own `#mount` only, and no JS exists.
   `renderer/src/abi.rs::well_known_atoms()` is the normative table.
-- **1024+: dynamic atoms**, guest-defined once via `DefineAtom`, reused forever.
-  Host table is a flat `Vec` indexed by atom — no hashing at apply time.
+- **1024–65535: dynamic atoms**, guest-defined once via `DefineAtom`, reused
+  forever. Host table is a flat `Vec` indexed by atom — no hashing at apply
+  time — so the range is enforced at decode: a `DefineAtom` outside it makes
+  the batch invalid (it would otherwise let one op allocate gigabytes, or
+  redefine a well-known atom).
 
 Attribute/text *values* are inline UTF-8 in the batch string heap — values are
 usually unique; names are Zipf-distributed. Intern what repeats, ship what doesn't.
@@ -149,7 +158,7 @@ Op record: `op u8 | flags u8 | a u16 | b u32 | c u32 | d u32`.
 | `Remove` | b=id (subtree) | `remove_and_drop_node` |
 | `ReplaceWith` | b=old, c=new | `replace_node_with` |
 | `Clear` | b=id (children only) | `remove_and_drop_all_children` |
-| `SetInnerHTML` | b=id, d=str | `set_inner_html` — escape hatch; children get no guest ids |
+| `SetInnerHTML` | b=id, d=str | escape hatch; children get no guest ids. Parsed in a scratch document, then copied in without denied tags or `<style>` (see below). On a guest `<style>` it sets raw CSS text. |
 | `DefineAtom` | b=atom, d=str | host atom table |
 | `Listen` | b=id, a=event_kind, c=listen_flags | subscription (DOM state, like addEventListener) |
 | `Unlisten` | b=id, a=event_kind | |
@@ -157,6 +166,32 @@ Op record: `op u8 | flags u8 | a u16 | b u32 | c u32 | d u32`.
 | `Unobserve` | b=id, c=what_flags | |
 | `Focus` | b=id | focus control |
 | `ScrollIntoView` | b=id | v1.1 candidate |
+
+### What the host enforces when applying ops
+
+- **Denied tags.** `CreateElement` with `script`, `noscript`, `iframe`,
+  `frame`, `frameset`, `object`, `embed`, `applet`, `portal`, `link`, `base`,
+  `meta`, `title`, `html`, `head`, `body`, `template` or `slot` is ignored.
+  These are document-level or resource-loading elements that would act outside
+  the mount (window title, base URL, linked sheets, frames).
+- **Guest `<style>` is scoped.** A guest `style` element is created as an
+  inert `gwb-style` node. The host reads its text, rewrites every selector to
+  match only inside the tab's mount (`:root`/`html`/`body` map to the mount
+  itself), keeps `@media`/`@supports`/`@container`/`@layer` (recursing),
+  `@keyframes`/`@font-face` and friends verbatim, and drops `@import`,
+  `@namespace`, `@scope` and unknown at-rules. The result loads into a
+  host-owned sheet the guest can't address. Guest CSS therefore can't hide or
+  restyle the tab strip, address bar or console.
+- **URL attributes.** A `src`/`href`/`action`/`formaction` value that can't be
+  resolved as a URL is dropped (the engine would otherwise panic). Nothing is
+  fetched for `<img src>` etc.; the document has no network provider.
+- **Containment.** Each tab's mount sits in a host wrapper that is positioned
+  and clips (`overflow: hidden`), so guest boxes, including `position: fixed`,
+  can't paint over the browser chrome.
+- **Budgets.** Every guest call (`gwb_start`, `gwb_events`, `gwb_frame`) runs
+  under a CPU deadline (10 s for start, 2 s per call) and the instance is
+  capped at 512 MiB of linear memory. A guest that traps is unloaded and its
+  tab shows why.
 
 ## Events (host → guest)
 
@@ -222,7 +257,8 @@ at the same post-call point; one style/layout/paint per frame regardless of batc
 
 ## Capabilities (reserved)
 
-WASI grants stay minimal (stdio today). Future host modules (`gwb_net`,
+WASI grants stay minimal: stdout/stderr only (no stdin, filesystem, env or
+sockets). Future host modules (`gwb_net`,
 `gwb_storage`, `gwb_gfx`) are separate import modules gated per-app by host policy —
 the wasm import list *is* the permission manifest.
 

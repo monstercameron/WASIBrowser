@@ -7,6 +7,8 @@
 //! behalf with its app-scoped ed25519 key, and this server verifies it.
 //! Mirrors `server/auth.go`'s channel-authn logic in Rust.
 
+use std::io::Read as _;
+
 use base64::Engine as _;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -184,8 +186,9 @@ fn main() {
     for mut request in server.incoming_requests() {
         let method = request.method().clone();
         let url = request.url().to_string();
+        // Same 1 MiB request cap as the Go servers (io.LimitReader).
         let mut body = Vec::new();
-        let _ = request.as_reader().read_to_end(&mut body);
+        let _ = request.as_reader().take(1 << 20).read_to_end(&mut body);
 
         let headers = request.headers().to_vec();
         let req_id = header_value(&headers, "GWB-Req-Id").to_string();

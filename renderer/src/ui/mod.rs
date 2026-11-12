@@ -24,6 +24,14 @@ use blitz_shell::{BlitzApplication, BlitzShellEvent, BlitzShellProxy, WindowConf
 use blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, DomEvent, EventState, KeyState, UiEvent};
 use keyboard_types::{Code, Key, Location, Modifiers};
 use wasmtime::Engine;
+
+use crate::abi::{LockExt, SafeMutate};
+
+mod app;
+mod bookmarks;
+mod script_driver;
+
+pub use app::GwbApplication;
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -55,170 +63,7 @@ pub fn host_console_line(proxy: &blitz_shell::BlitzShellProxy, line: &str) {
     })));
 }
 
-const SHELL_HTML: &str = r#"<!DOCTYPE html>
-<html><head><style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
-  body { display: flex; flex-direction: column; background: #1e1f22; color: #e8e8e8;
-         font-family: 'Segoe UI', sans-serif; }
-  #shell { flex: 1 1 auto; min-height: 0; display: flex; background: #17181a; }
-  #shell.layout-top { flex-direction: column; }
-  #shell.layout-side { flex-direction: row; }
-  /* Tab strip sits a shade darker than the toolbar below it — the active
-     chip's top accent + matching body color is what visually welds it to
-     the content, so the strip itself can stay quiet. */
-  #tabstrip { flex: 0 0 auto; display: flex; gap: 4px; background: #101113;
-              overflow: auto; align-items: center; }
-  #shell.layout-top #tabstrip { flex-direction: row; padding: 8px 8px 0; }
-  #shell.layout-side #tabstrip { flex-direction: column; align-items: stretch;
-                                  width: 200px; padding: 8px 0 8px 8px; }
-  .tab-chip { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
-              color: #9a9fa6; background: transparent; border: none;
-              border-top: 2px solid transparent; border-radius: 6px 6px 0 0;
-              padding: 7px 10px 6px; cursor: pointer; white-space: nowrap;
-              max-width: 220px; overflow: hidden; transition: color .1s ease; }
-  #shell.layout-side .tab-chip { border-top: none; border-left: 2px solid transparent;
-                                  border-radius: 6px; }
-  .tab-chip:hover { color: #e8e8e8; background: rgba(255,255,255,0.04); }
-  .tab-chip.active { background: #26282c; border-top-color: #5b9dff; color: #f2f3f5; }
-  #shell.layout-side .tab-chip.active { border-top-color: transparent; border-left-color: #5b9dff; }
-  .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tab-close { opacity: 0; width: 15px; height: 15px; display: flex; align-items: center;
-               justify-content: center; border-radius: 4px; font-size: 12px; line-height: 1; }
-  .tab-chip:hover .tab-close, .tab-chip.active .tab-close { opacity: 0.6; }
-  .tab-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.16); }
-  #btn-newtab { flex: 0 0 auto; margin: 0 4px 6px; }
-  #maincol { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
-             background: #26282c; }
-  #toolbar { flex: 0 0 auto; display: flex; align-items: center;
-             justify-content: space-between; padding: 7px 12px; gap: 14px;
-             border-bottom: 1px solid #313438; }
-  #addressbar { flex: 0 1 auto; width: 600px; min-width: 0; display: flex; gap: 4px;
-                align-items: center; background: #1a1b1d; border: 1px solid #3a3d41;
-                border-radius: 8px; padding: 3px; transition: border-color .12s ease,
-                box-shadow .12s ease; }
-  #addressbar:focus-within { border-color: #5b9dff; box-shadow: 0 0 0 3px rgba(91,157,255,0.18); }
-  #ab-input { flex: 1 1 auto; min-width: 0; font-size: 12.5px; padding: 5px 8px;
-              border: none; background: transparent;
-              color: #e8e8e8; font-family: Consolas, 'Cascadia Mono', monospace; }
-  #ab-input::placeholder { color: #6b7076; }
-  .tb-btn { font-size: 12px; color: #c9cdd3; background: #313438;
-            border: 1px solid transparent; border-radius: 6px; padding: 5px 11px;
-            cursor: pointer; font-family: 'Segoe UI', sans-serif; }
-  .tb-btn:hover { background: #3a3e44; color: #ffffff; }
-  .tb-icon { min-width: 30px; display: flex; align-items: center; justify-content: center;
-             padding: 5px 7px; font-size: 13px; background: transparent; border: none;
-             border-radius: 6px; color: #9fa4ab; }
-  .tb-icon:hover { background: rgba(255,255,255,0.08); color: #ffffff; }
-  #toolbar-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
-  #tb-menu, #tb-bookmarks { width: 30px; height: 28px; display: flex; flex-direction: column;
-             align-items: center; justify-content: center; gap: 3px; background: transparent;
-             border: none; border-radius: 6px; cursor: pointer; flex: 0 0 auto; }
-  #tb-menu:hover, #tb-bookmarks:hover { background: rgba(255,255,255,0.08); }
-  .kebab-dot { width: 3px; height: 3px; border-radius: 50%; background: #9fa4ab; }
-  #tb-menu:hover .kebab-dot { background: #e8e8e8; }
-  .hbar { width: 14px; height: 2px; border-radius: 1px; background: #9fa4ab; }
-  #tb-bookmarks:hover .hbar { background: #e8e8e8; }
-  #ab-bookmark { font-weight: 700; color: #9fa4ab; }
-  /* Normal-flow expanding row (same reasoning as #toolbar-menu below): a
-     floating overlay via position:absolute is unreliable inside nested flex
-     containers in this engine's layout (Taffy). */
-  #bookmarks-panel { display: none; flex: 0 0 auto; flex-direction: column;
-                     background: #202225; border-bottom: 1px solid #3a3d41; }
-  .bm-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px;
-            border-bottom: 1px solid #2a2c30; cursor: pointer; }
-  .bm-row:hover { background: #26282c; }
-  .bm-title { font-size: 12.5px; color: #e8e8e8; overflow: hidden; text-overflow: ellipsis;
-              white-space: nowrap; flex: 1 1 auto; min-width: 0; }
-  .bm-url { font-size: 11px; color: #6b7076; font-family: Consolas, 'Cascadia Mono', monospace;
-            flex: 0 0 auto; }
-  .bm-remove { flex: 0 0 auto; font-size: 11px; color: #9fa4ab; padding: 3px 8px;
-               border-radius: 5px; background: transparent; border: none; cursor: pointer;
-               font-family: 'Segoe UI', sans-serif; }
-  .bm-remove:hover { background: rgba(255,138,128,0.15); color: #ff8a80; }
-  .bm-empty { padding: 14px; font-size: 12.5px; color: #6b7076; text-align: center; }
-  /* Normal-flow expanding row (like #console's own show/hide), not a
-     floating overlay — position:absolute inside nested flex containers is
-     unreliable in this engine's layout (Taffy), so the menu pushes #app
-     down instead of floating above it. */
-  #toolbar-menu { display: none; flex: 0 0 auto; flex-direction: row; flex-wrap: wrap;
-                  gap: 6px; padding: 8px 12px; background: #202225;
-                  border-bottom: 1px solid #3a3d41; }
-  .menu-item { background: #313438; border: 1px solid transparent; color: #c9cdd3;
-               font-size: 12px; padding: 5px 11px; border-radius: 6px; cursor: pointer;
-               font-family: 'Segoe UI', sans-serif; }
-  .menu-item:hover { background: #3a3e44; color: #ffffff; }
-  #app { flex: 1 1 auto; min-height: 0; overflow-y: auto; position: relative; }
-  /* display:flex (not plain block) so the guest's top-level div is a flex
-     ITEM here and gets Taffy's flex cross-axis stretch sizing for free —
-     plain block width:100% on a guest's own root div was observed to be
-     silently ignored (computed via shrink-to-fit instead) whenever a
-     display:grid descendant existed anywhere in that guest's subtree. */
-  .mount { display: flex; flex-direction: column; min-height: 100%; }
-  /* No element styling inside .mount: guest apps own their look entirely. */
-  #divider { flex: 0 0 auto; height: 6px; background: #26282c;
-             border-top: 1px solid #3a3d41; cursor: row-resize; }
-  #divider:hover { background: #5b9dff; }
-  /* Fixed height (host-adjusted by dragging #divider): the console NEVER
-     grows with message count — #console-log overflow-scrolls instead. */
-  #console { flex: 0 0 auto; height: 240px; min-height: 0; display: flex;
-             flex-direction: column; background: #161719; }
-  #console-title { flex: 0 0 auto; padding: 6px 12px; font-size: 12px;
-                   color: #9a9fa6; background: #222427;
-                   border-bottom: 1px solid #3a3d41;
-                   font-family: Consolas, monospace; }
-  #console-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex;
-                 flex-direction: column-reverse; padding: 8px 12px;
-                 font-family: Consolas, 'Cascadia Mono', monospace;
-                 font-size: 13px; line-height: 1.5; }
-  .ln { white-space: pre-wrap; }
-  .out { color: #d7d9dd; }
-  .err { color: #ff8a80; }
-  .host { color: #82aaff; }
-</style></head>
-<body>
-  <div id="shell" class="layout-top">
-    <div id="tabstrip">
-      <button id="btn-newtab" class="tb-icon" title="New tab">+</button>
-    </div>
-    <div id="maincol">
-      <header id="toolbar">
-        <div id="addressbar">
-          <button id="ab-back" class="tb-icon" title="Back">&larr;</button>
-          <button id="ab-fwd" class="tb-icon" title="Forward">&rarr;</button>
-          <button id="ab-reload" class="tb-btn" title="Reload">reload</button>
-          <input id="ab-input" type="text" placeholder="web://name or path.wasm" value="" />
-          <button id="ab-go" class="tb-btn">go</button>
-          <button id="ab-bookmark" class="tb-icon" title="Bookmark this page">*</button>
-        </div>
-        <div id="toolbar-actions">
-          <button id="tb-bookmarks" class="tb-icon" title="Bookmarks">
-            <span class="hbar"></span><span class="hbar"></span><span class="hbar"></span>
-          </button>
-          <button id="tb-menu" title="More">
-            <span class="kebab-dot"></span><span class="kebab-dot"></span><span class="kebab-dot"></span>
-          </button>
-        </div>
-      </header>
-      <div id="toolbar-menu">
-        <button id="tb-tabpos" class="menu-item">tabs: top</button>
-        <button id="tb-theme" class="menu-item">dark mode</button>
-        <button id="tb-clear" class="menu-item">clear console</button>
-        <button id="tb-console" class="menu-item">hide console</button>
-      </div>
-      <div id="bookmarks-panel">
-        <div id="bookmarks-empty" class="bm-empty">No bookmarks yet — click the * next to the address bar to save this page.</div>
-      </div>
-      <main id="app"></main>
-      <div id="divider"></div>
-      <footer id="console">
-        <div id="console-title">console — drag the bar above to resize</div>
-        <div id="console-log"></div>
-      </footer>
-    </div>
-  </div>
-</body></html>
-"#;
+const SHELL_HTML: &str = include_str!("shell.html");
 
 /// Truncate a tab title to a fixed char budget with an ASCII "..." marker
 /// (never a Unicode ellipsis glyph — same reasoning as the reload button:
@@ -308,6 +153,8 @@ enum ChromeAction {
     ToggleBookmarksPanel,
     OpenBookmark(String),
     RemoveBookmark(String),
+    /// The active tab's guest trapped while handling a UI event.
+    GuestFault(String),
 }
 
 /// One saved page: title + `web://` target (or bare `.wasm` path), plus the
@@ -329,6 +176,13 @@ struct TabState {
     id: u32,
     guest: Option<crate::abi::GuestRuntime>,
     maps: crate::abi::NodeMaps,
+    /// Host-owned wrapper around the mount: the tab's show/hide toggle, its
+    /// CSS scope (`.gwb-scope-t{id}`), and a positioned, clipped box so guest
+    /// content (incl. `position: fixed`, which Blitz lays out as absolute)
+    /// can never paint over the browser chrome. Guests can't address it.
+    wrap_node: usize,
+    /// Host-owned hidden container for this tab's scoped guest stylesheets.
+    styles_host: usize,
     mount_node: usize,
     chip_node: usize,
     label_node: usize,
@@ -377,6 +231,12 @@ pub struct GwbDocument {
     menu_open: bool,
     bookmarks: Vec<Bookmark>,
     bookmarks_panel_open: bool,
+    /// The DOM changed since the host last resolved style + layout itself.
+    /// See `resolve_if_stale`.
+    layout_stale: bool,
+    /// Animation clock for host-triggered resolves (seconds since startup,
+    /// the same base Blitz's shell uses).
+    started: std::time::Instant,
 }
 
 impl GwbDocument {
@@ -384,6 +244,10 @@ impl GwbDocument {
         let config = DocumentConfig {
             // set_inner_html needs a parser provider at mutation time.
             html_parser_provider: Some(Arc::new(HtmlProvider)),
+            // A base Blitz can resolve against (its default `data:` base
+            // panics on any relative src/href). No net provider is set, so
+            // nothing is ever fetched from it.
+            base_url: Some(crate::abi::DOC_BASE_URL.to_string()),
             ..Default::default()
         };
         let doc = HtmlDocument::from_html(SHELL_HTML, config);
@@ -445,6 +309,8 @@ impl GwbDocument {
             menu_open: false,
             bookmarks: Vec::new(),
             bookmarks_panel_open: false,
+            layout_stale: true,
+            started: std::time::Instant::now(),
         };
         let idx = me.open_new_tab();
         me.activate_tab(idx);
@@ -461,23 +327,29 @@ impl GwbDocument {
         let id = self.next_tab_id;
         self.next_tab_id += 1;
         let (chip_node, label_node, close_node) = self.create_tab_chip("New Tab");
-        let mount_node = {
+        let (styles_host, wrap_node, mount_node) = {
             let mut m = self.doc.mutate();
+            let styles = m.create_element(qn("div"), Vec::new());
+            m.set_attr(styles, attr_qn("class"), "guest-styles");
+            let wrap = m.create_element(qn("div"), Vec::new());
+            m.set_attr(wrap, attr_qn("class"), &format!("mount-wrap gwb-scope-t{id}"));
+            m.set_style_property(wrap, "display", "none");
             let n = m.create_element(qn("div"), Vec::new());
-            m.set_attribute(n, attr_qn("class"), "mount");
-            m.set_style_property(n, "display", "none");
-            m.append_children(self.chrome.app_root, &[n]);
-            n
+            m.set_attr(n, attr_qn("class"), "mount");
+            // The wrapper's ONLY child, ever: the scope selector relies on it.
+            m.append_children(wrap, &[n]);
+            m.append_children(self.chrome.app_root, &[styles, wrap]);
+            (styles, wrap, n)
         };
         // Guest id 1 = the mount root (spec: the only host node a guest can
         // address), re-seeded fresh for every tab/navigation.
-        let mut maps = crate::abi::NodeMaps::default();
-        maps.fwd.insert(1, mount_node);
-        maps.rev.insert(mount_node, 1);
+        let maps = Self::fresh_maps(id, mount_node, styles_host);
         self.tabs.push(TabState {
             id,
             guest: None,
             maps,
+            wrap_node,
+            styles_host,
             mount_node,
             chip_node,
             label_node,
@@ -490,16 +362,67 @@ impl GwbDocument {
         self.tabs.len() - 1
     }
 
+    /// Node maps for a (re)loaded tab: guest id 1 = the mount, and guest CSS
+    /// scoped to `.gwb-scope-t{id}>*` (the wrapper's only child, the mount).
+    fn fresh_maps(tab_id: u32, mount_node: usize, styles_host: usize) -> crate::abi::NodeMaps {
+        crate::abi::NodeMaps::for_mount(
+            mount_node,
+            crate::abi::StyleScope {
+                mount: mount_node,
+                styles_host,
+                prefix: format!(".gwb-scope-t{tab_id}>*"),
+            },
+        )
+    }
+
+    /// A guest call returned an error. Log it; if the guest itself faulted
+    /// (a wasm trap: CPU budget, out-of-bounds, unreachable, stack overflow)
+    /// unload it. Host-side errors (e.g. an event that didn't fit the event
+    /// region) leave the guest running.
+    fn guest_call_failed(&mut self, tab_idx: usize, what: &str, e: anyhow::Error) {
+        crate::logger::log("crash", &format!("{what} failed: {e:#}"));
+        if let Some(why) = crate::abi::guest_fault(&e) {
+            self.kill_guest(tab_idx, &why);
+        }
+    }
+
+    /// Unload a tab's guest after it trapped (CPU budget, memory limit, or
+    /// a wasm trap). A trapped instance can be left mid-update, and a guest
+    /// stuck in a loop would otherwise burn its full budget on every event.
+    fn kill_guest(&mut self, tab_idx: usize, why: &str) {
+        let Some(tab) = self.tabs.get_mut(tab_idx) else { return };
+        if tab.guest.take().is_none() {
+            return;
+        }
+        let (mount, styles, tab_id) = (tab.mount_node, tab.styles_host, tab.id);
+        tab.maps = Self::fresh_maps(tab_id, mount, styles);
+        {
+            let mut m = self.doc.mutate();
+            m.drop_children(mount);
+            m.drop_children(styles);
+            let msg = m.create_element(qn("div"), Vec::new());
+            m.set_style_property(msg, "padding", "24px");
+            m.set_style_property(msg, "font-family", "'Segoe UI', sans-serif");
+            m.set_style_property(msg, "color", "#b3261e");
+            let text = m.create_text_node(&format!("This app stopped: {why}"));
+            m.append_children(msg, &[text]);
+            m.append_children(mount, &[msg]);
+        }
+        crate::logger::log("crash", &format!("tab {tab_id}: guest unloaded: {why}"));
+        host_console_line(&self.proxy, &format!("[host] tab {tab_id}: app stopped: {why}"));
+        self.dirty = true;
+    }
+
     fn create_tab_chip(&mut self, title: &str) -> (usize, usize, usize) {
         let mut m = self.doc.mutate();
         let chip = m.create_element(qn("div"), Vec::new());
-        m.set_attribute(chip, attr_qn("class"), "tab-chip");
+        m.set_attr(chip, attr_qn("class"), "tab-chip");
         let label = m.create_element(qn("span"), Vec::new());
-        m.set_attribute(label, attr_qn("class"), "tab-label");
-        m.set_inner_html(label, &escape_html(&truncate_title(title)));
+        m.set_attr(label, attr_qn("class"), "tab-label");
+        m.set_html(label, &escape_html(&truncate_title(title)));
         let close = m.create_element(qn("span"), Vec::new());
-        m.set_attribute(close, attr_qn("class"), "tab-close");
-        m.set_inner_html(close, "&times;");
+        m.set_attr(close, attr_qn("class"), "tab-close");
+        m.set_html(close, "&times;");
         m.append_children(chip, &[label, close]);
         m.insert_nodes_before(self.chrome.btn_newtab, &[chip]);
         drop(m);
@@ -512,12 +435,12 @@ impl GwbDocument {
         }
         let mut m = self.doc.mutate();
         if let Some(old) = self.tabs.get(self.active_idx) {
-            m.set_style_property(old.mount_node, "display", "none");
-            m.set_attribute(old.chip_node, attr_qn("class"), "tab-chip");
+            m.set_style_property(old.wrap_node, "display", "none");
+            m.set_attr(old.chip_node, attr_qn("class"), "tab-chip");
         }
         let new = &self.tabs[idx];
-        m.set_style_property(new.mount_node, "display", "flex");
-        m.set_attribute(new.chip_node, attr_qn("class"), "tab-chip active");
+        m.set_style_property(new.wrap_node, "display", "flex");
+        m.set_attr(new.chip_node, attr_qn("class"), "tab-chip active");
         drop(m);
         self.active_idx = idx;
         self.dirty = true;
@@ -529,9 +452,9 @@ impl GwbDocument {
         self.activate_tab(idx);
         self.addr_draft.clear();
         let mut m = self.doc.mutate();
-        m.set_attribute(self.chrome.ab_input, attr_qn("value"), "");
+        m.set_attr(self.chrome.ab_input, attr_qn("value"), "");
         drop(m);
-        self.doc.set_focus_to(self.chrome.ab_input);
+        crate::abi::focus(&mut self.doc, self.chrome.ab_input);
     }
 
     fn close_tab(&mut self, tab_id: u32) {
@@ -544,11 +467,13 @@ impl GwbDocument {
             self.close_window_requested = true;
             return;
         }
-        let (mount, chip) = (self.tabs[idx].mount_node, self.tabs[idx].chip_node);
+        let t = &self.tabs[idx];
+        let (wrap, styles, chip) = (t.wrap_node, t.styles_host, t.chip_node);
         {
             let mut m = self.doc.mutate();
-            m.remove_and_drop_node(mount);
-            m.remove_and_drop_node(chip);
+            m.drop_node(wrap); // takes the mount with it
+            m.drop_node(styles);
+            m.drop_node(chip);
         }
         self.tabs.remove(idx); // drops GuestRuntime — safe/synchronous teardown
         if self.active_idx == idx {
@@ -571,7 +496,7 @@ impl GwbDocument {
         let text = self.tabs.get(self.active_idx).map(|t| t.target.clone()).unwrap_or_default();
         self.addr_draft = text.clone();
         let mut m = self.doc.mutate();
-        m.set_attribute(self.chrome.ab_input, attr_qn("value"), &text);
+        m.set_attr(self.chrome.ab_input, attr_qn("value"), &text);
         drop(m);
         self.dirty = true;
         self.refresh_bookmark_star();
@@ -582,7 +507,7 @@ impl GwbDocument {
         let label_node = tab.label_node;
         let title = tab.title.clone();
         let mut m = self.doc.mutate();
-        m.set_inner_html(label_node, &escape_html(&truncate_title(&title)));
+        m.set_html(label_node, &escape_html(&truncate_title(&title)));
         drop(m);
         self.dirty = true;
     }
@@ -621,14 +546,17 @@ impl GwbDocument {
         // no custom Drop needed, per the abi.rs guest-lifecycle review).
         self.tabs[tab_idx].guest = None;
         let mount_node = self.tabs[tab_idx].mount_node;
+        let styles_host = self.tabs[tab_idx].styles_host;
         {
             let mut m = self.doc.mutate();
-            m.remove_and_drop_all_children(mount_node);
+            m.drop_children(mount_node);
+            m.drop_children(styles_host);
+            // A guest can set inline style/attrs on its mount (id 1); reset
+            // them so the next app starts from the host's defaults.
+            m.set_attr(mount_node, attr_qn("class"), "mount");
+            m.clear_attr(mount_node, attr_qn("style"));
         }
-        let mut maps = crate::abi::NodeMaps::default();
-        maps.fwd.insert(1, mount_node);
-        maps.rev.insert(mount_node, 1);
-        self.tabs[tab_idx].maps = maps;
+        self.tabs[tab_idx].maps = Self::fresh_maps(self.tabs[tab_idx].id, mount_node, styles_host);
 
         let (w, h, scale) = {
             let inner = self.doc.inner();
@@ -647,13 +575,22 @@ impl GwbDocument {
             &format!("navigating tab {tab_id} to '{target}' -> bundle={} title=\"{}\"", resolved.bundle_path, resolved.title),
         );
         let mut loaded = false;
-        match crate::abi::try_load(&self.engine, &resolved.bundle_path, tab_id, self.proxy.clone(), resolved.services, resolved.links) {
+        match crate::abi::try_load(
+            &self.engine,
+            &resolved.bundle_path,
+            tab_id,
+            self.proxy.clone(),
+            resolved.services,
+            resolved.links,
+            resolved.fetch,
+        ) {
             Ok(Some(mut rt)) => {
                 if let Some(id) = self.window_id {
-                    rt.shared.lock().unwrap().window_id = Some(id);
+                    rt.shared.lock_ok().window_id = Some(id);
                 }
                 if let Err(e) = rt.start(w, h, scale, self.theme_dark as u32) {
                     crate::logger::log("crash", &format!("gwb_start failed: {e:#}"));
+                    host_console_line(&self.proxy, &format!("[host] app failed to start: {e:#}"));
                 } else {
                     self.tabs[tab_idx].guest = Some(rt);
                     let applied = self.apply_guest_batches_for(tab_idx);
@@ -782,7 +719,7 @@ impl GwbDocument {
                     self.theme_dark = !self.theme_dark;
                     let dark = self.theme_dark;
                     let mut m = self.doc.mutate();
-                    m.set_inner_html(
+                    m.set_html(
                         self.chrome.tb_theme,
                         if dark { "light mode" } else { "dark mode" },
                     );
@@ -797,12 +734,12 @@ impl GwbDocument {
                     self.tabs_side = !self.tabs_side;
                     let side = self.tabs_side;
                     let mut m = self.doc.mutate();
-                    m.set_attribute(
+                    m.set_attr(
                         self.chrome.shell,
                         attr_qn("class"),
                         if side { "layout-side" } else { "layout-top" },
                     );
-                    m.set_inner_html(self.chrome.tb_tabpos, if side { "tabs: side" } else { "tabs: top" });
+                    m.set_html(self.chrome.tb_tabpos, if side { "tabs: side" } else { "tabs: top" });
                     drop(m);
                     self.dirty = true;
                     crate::logger::log("ui", if side { "tabs -> side" } else { "tabs -> top" });
@@ -815,6 +752,7 @@ impl GwbDocument {
                 ChromeAction::NavBack => self.nav_back(),
                 ChromeAction::NavForward => self.nav_forward(),
                 ChromeAction::NavReload => self.nav_reload(),
+                ChromeAction::GuestFault(why) => self.kill_guest(self.active_idx, &why),
                 ChromeAction::AddressInput(text) => self.addr_draft = text,
                 ChromeAction::AddressSubmit => {
                     let target = self.addr_draft.clone();
@@ -844,178 +782,6 @@ impl GwbDocument {
         }
     }
 
-    // ---- bookmarks: toggle / list / persist ------------------------------
-
-    fn bookmarks_path() -> &'static str {
-        "bookmarks.json"
-    }
-
-    fn load_bookmarks(&mut self) {
-        let text = match std::fs::read_to_string(Self::bookmarks_path()) {
-            Ok(t) => t,
-            Err(_) => return, // no file yet: fine, starts empty
-        };
-        let Ok(serde_json::Value::Array(items)) = serde_json::from_str(&text) else {
-            crate::logger::log("ui", "bookmarks.json is malformed; ignoring");
-            return;
-        };
-        for item in items {
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let target = item.get("target").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if target.is_empty() || self.is_bookmarked(&target) {
-                continue;
-            }
-            let (row_node, remove_node) = self.create_bookmark_row(&title, &target);
-            self.bookmarks.push(Bookmark { title, target, row_node, remove_node });
-        }
-        self.refresh_bookmarks_empty_state();
-        crate::logger::log("ui", &format!("loaded {} bookmark(s)", self.bookmarks.len()));
-    }
-
-    fn save_bookmarks(&self) {
-        let items: Vec<serde_json::Value> = self
-            .bookmarks
-            .iter()
-            .map(|b| serde_json::json!({ "title": b.title, "target": b.target }))
-            .collect();
-        let text = match serde_json::to_string_pretty(&serde_json::Value::Array(items)) {
-            Ok(t) => t,
-            Err(e) => {
-                crate::logger::log("ui", &format!("bookmarks serialize failed: {e}"));
-                return;
-            }
-        };
-        if let Err(e) = std::fs::write(Self::bookmarks_path(), text) {
-            crate::logger::log("ui", &format!("bookmarks.json write failed: {e}"));
-        }
-    }
-
-    fn is_bookmarked(&self, target: &str) -> bool {
-        self.bookmarks.iter().any(|b| b.target == target)
-    }
-
-    /// Toggle the bookmark for the active tab's current target (mirrors a
-    /// browser's address-bar star: click again to remove).
-    fn toggle_bookmark(&mut self) {
-        let Some(tab) = self.tabs.get(self.active_idx) else { return };
-        if tab.target.is_empty() {
-            return;
-        }
-        let target = tab.target.clone();
-        let title = tab.title.clone();
-        if let Some(pos) = self.bookmarks.iter().position(|b| b.target == target) {
-            let bm = self.bookmarks.remove(pos);
-            let mut m = self.doc.mutate();
-            m.remove_and_drop_node(bm.row_node);
-            drop(m);
-            crate::logger::log("ui", &format!("bookmark removed: {target}"));
-        } else {
-            let (row_node, remove_node) = self.create_bookmark_row(&title, &target);
-            self.bookmarks.push(Bookmark { title, target: target.clone(), row_node, remove_node });
-            crate::logger::log("ui", &format!("bookmark added: {target}"));
-        }
-        self.refresh_bookmarks_empty_state();
-        self.refresh_bookmark_star();
-        self.save_bookmarks();
-        self.dirty = true;
-    }
-
-    fn remove_bookmark(&mut self, target: &str) {
-        let Some(pos) = self.bookmarks.iter().position(|b| b.target == target) else { return };
-        let bm = self.bookmarks.remove(pos);
-        let mut m = self.doc.mutate();
-        m.remove_and_drop_node(bm.row_node);
-        drop(m);
-        crate::logger::log("ui", &format!("bookmark removed: {target}"));
-        self.refresh_bookmarks_empty_state();
-        self.refresh_bookmark_star();
-        self.save_bookmarks();
-        self.dirty = true;
-    }
-
-    fn open_bookmark(&mut self, target: String) {
-        self.navigate_active(&target);
-        self.set_bookmarks_panel_open(false);
-    }
-
-    /// Build one row (title, url, remove button) and insert it just before
-    /// the panel's permanent "no bookmarks yet" node — same pattern as tab
-    /// chips inserting before `#btn-newtab`.
-    fn create_bookmark_row(&mut self, title: &str, target: &str) -> (usize, usize) {
-        let mut m = self.doc.mutate();
-        let row = m.create_element(qn("div"), Vec::new());
-        m.set_attribute(row, attr_qn("class"), "bm-row");
-        let title_el = m.create_element(qn("span"), Vec::new());
-        m.set_attribute(title_el, attr_qn("class"), "bm-title");
-        m.set_inner_html(title_el, &escape_html(&truncate_title(title)));
-        let url_el = m.create_element(qn("span"), Vec::new());
-        m.set_attribute(url_el, attr_qn("class"), "bm-url");
-        m.set_inner_html(url_el, &escape_html(target));
-        let remove = m.create_element(qn("button"), Vec::new());
-        m.set_attribute(remove, attr_qn("class"), "bm-remove");
-        m.set_inner_html(remove, "remove");
-        m.append_children(row, &[title_el, url_el, remove]);
-        m.insert_nodes_before(self.chrome.bookmarks_empty, &[row]);
-        drop(m);
-        (row, remove)
-    }
-
-    fn refresh_bookmarks_empty_state(&mut self) {
-        let show_empty = self.bookmarks.is_empty();
-        let mut m = self.doc.mutate();
-        m.set_style_property(
-            self.chrome.bookmarks_empty,
-            "display",
-            if show_empty { "block" } else { "none" },
-        );
-        drop(m);
-        self.dirty = true;
-    }
-
-    /// Sync the address-bar star to whether the active tab's target is
-    /// bookmarked — called on navigate/activate so it never goes stale.
-    fn refresh_bookmark_star(&mut self) {
-        let target = self.tabs.get(self.active_idx).map(|t| t.target.clone()).unwrap_or_default();
-        let active = !target.is_empty() && self.is_bookmarked(&target);
-        let mut m = self.doc.mutate();
-        // Two layered engine quirks ruled out simpler approaches: (1) toggling
-        // a CLASS here (like tab chips use) hits a real bug where a class
-        // attribute already present from the static SHELL_HTML parse doesn't
-        // get replaced by a runtime set_attribute of the same name — it
-        // appends a second "class" attr instead, and style matching only
-        // sees the first (stale) one (see attr_qn's doc comment — fixed for
-        // class/value elsewhere, but simplest to just avoid class-matching
-        // here). (2) The specialized set_style_property mutator marks the
-        // node itself dirty but never propagates that up through ancestors
-        // (unlike set_attribute, which explicitly calls mark_ancestors_dirty)
-        // — Stylo's restyle traversal starts at the root and only descends
-        // into subtrees an ancestor flagged dirty, so a color-only change
-        // through that API is silently never repainted. Setting `style` as a
-        // plain HTML attribute goes through set_attribute's code path
-        // instead, which does propagate correctly.
-        m.set_attribute(
-            self.chrome.ab_bookmark,
-            attr_qn("style"),
-            &format!("color: {}", if active { "#ffb400" } else { "#9fa4ab" }),
-        );
-        drop(m);
-        self.dirty = true;
-    }
-
-    fn set_bookmarks_panel_open(&mut self, open: bool) {
-        if self.bookmarks_panel_open == open {
-            return;
-        }
-        self.bookmarks_panel_open = open;
-        let mut m = self.doc.mutate();
-        m.set_style_property(
-            self.chrome.bookmarks_panel,
-            "display",
-            if open { "flex" } else { "none" },
-        );
-        drop(m);
-        self.dirty = true;
-    }
 
     fn set_menu_open(&mut self, open: bool) {
         if self.menu_open == open {
@@ -1033,7 +799,7 @@ impl GwbDocument {
         let mut m = self.doc.mutate();
         m.set_style_property(self.chrome.console, "display", if show { "flex" } else { "none" });
         m.set_style_property(self.chrome.divider, "display", if show { "block" } else { "none" });
-        m.set_inner_html(
+        m.set_html(
             self.chrome.tb_console,
             if show { "hide console" } else { "show console" },
         );
@@ -1148,7 +914,7 @@ impl GwbDocument {
         self.window_id = Some(id);
         for tab in &self.tabs {
             if let Some(rt) = &tab.guest {
-                rt.shared.lock().unwrap().window_id = Some(id);
+                rt.shared.lock_ok().window_id = Some(id);
             }
         }
     }
@@ -1158,7 +924,7 @@ impl GwbDocument {
         self.tabs
             .get(self.active_idx)
             .and_then(|t| t.guest.as_ref())
-            .is_some_and(|rt| rt.shared.lock().unwrap().frame_requested)
+            .is_some_and(|rt| rt.shared.lock_ok().frame_requested)
     }
 
     /// Deliver a window-level event (resize/theme) to the active tab's guest
@@ -1178,234 +944,10 @@ impl GwbDocument {
                     self.dirty = true;
                 }
             }
-            Err(e) => crate::logger::log("crash", &format!("window event delivery failed: {e:#}")),
+            Err(e) => self.guest_call_failed(idx, "window event delivery", e),
         }
     }
 
-    // ---- scripted-driver support ------------------------------------
-
-    fn resolve(&self, selector: &str) -> Option<usize> {
-        self.doc.query_selector(selector).ok().flatten()
-    }
-
-    /// Dispatch a synthetic click DomEvent at the selected element. Unlike a
-    /// pointer sequence this is NOT hit-tested — it reaches the element even
-    /// when scrolled out of view (deliberate: this is a test driver, and
-    /// "scroll into view first" is the app's concern, not the assertion's).
-    pub fn script_click(&mut self, selector: &str) -> bool {
-        let Some(nid) = self.resolve(selector) else { return false };
-        let Some(node) = self.doc.get_node(nid) else { return false };
-        let data = node.synthetic_click_event(Modifiers::empty());
-        let is_input = node
-            .element_data()
-            .is_some_and(|el| matches!(&*el.name.local, "input" | "textarea"));
-        self.script_dispatch(nid, data);
-        // The pointer-down default (focus-on-click) didn't run; emulate it so
-        // `click #input` + `type ...` composes naturally (caret at end). The
-        // synthetic Focus event keeps guest onFocus handlers honest too.
-        if is_input {
-            if let Some(nid) = self.resolve(selector) {
-                self.doc.set_focus_to(nid);
-                self.caret_to_end(nid);
-                self.script_dispatch(
-                    nid,
-                    blitz_traits::events::DomEventData::Focus(blitz_traits::events::BlitzFocusEvent),
-                );
-            }
-        }
-        true
-    }
-
-    /// Commit text into the focused element (IME path — the real input pipeline).
-    pub fn script_type(&mut self, text: &str) {
-        self.handle_ui_event(UiEvent::Ime(BlitzImeEvent::Commit(text.to_string())));
-    }
-
-    pub fn script_focus(&mut self, selector: &str) -> bool {
-        let Some(nid) = self.resolve(selector) else { return false };
-        self.doc.set_focus_to(nid);
-        self.script_dispatch(
-            nid,
-            blitz_traits::events::DomEventData::Focus(blitz_traits::events::BlitzFocusEvent),
-        );
-        true
-    }
-
-    /// Build a `ShellEventHandler` scoped to the active tab. Computes the
-    /// tab-chrome id list BEFORE taking the active tab's mutable borrow (both
-    /// would otherwise borrow `self.tabs` at once).
-    fn dispatch_with_shell_handler<F: FnOnce(&mut EventDriver<'_, ShellEventHandler<'_>>)>(&mut self, f: F) {
-        let tab_chrome: Vec<(u32, usize, usize)> =
-            self.tabs.iter().map(|t| (t.id, t.chip_node, t.close_node)).collect();
-        let bookmark_chrome: Vec<(String, usize, usize)> = self
-            .bookmarks
-            .iter()
-            .map(|b| (b.target.clone(), b.row_node, b.remove_node))
-            .collect();
-        let active = self.active_idx;
-        let guest = if active < self.tabs.len() {
-            let tab = &mut self.tabs[active];
-            tab.guest.as_mut().map(|rt| (rt, &mut tab.maps))
-        } else {
-            None
-        };
-        let handler = ShellEventHandler {
-            guest,
-            chrome: self.chrome,
-            tab_chrome: &tab_chrome,
-            bookmark_chrome: &bookmark_chrome,
-            actions: &mut self.chrome_actions,
-        };
-        let mut driver = EventDriver::new(&mut self.doc, handler);
-        f(&mut driver);
-    }
-
-    /// Dispatch one synthetic DomEvent at a node through the shell + guest
-    /// event pipeline (shared by click/hover/unhover/rclick/wheel).
-    fn script_dispatch(&mut self, nid: usize, data: blitz_traits::events::DomEventData) {
-        let event = DomEvent::new(nid, data);
-        self.dispatch_with_shell_handler(|driver| driver.handle_dom_event(event));
-        if self.tabs.get(self.active_idx).is_some_and(|t| t.guest.is_some()) {
-            self.apply_active_guest_batches();
-            self.dirty = true;
-            self.check_observations();
-        }
-        self.process_chrome_actions();
-    }
-
-    /// Pointer-family synthesis: borrow the click event's coords/buttons and
-    /// rewrap as the requested variant. Same non-hit-tested contract as
-    /// script_click.
-    fn script_pointer(
-        &mut self,
-        selector: &str,
-        wrap: fn(blitz_traits::events::BlitzPointerEvent) -> blitz_traits::events::DomEventData,
-    ) -> bool {
-        use blitz_traits::events::DomEventData as D;
-        let Some(nid) = self.resolve(selector) else { return false };
-        let Some(node) = self.doc.get_node(nid) else { return false };
-        let D::Click(pe) = node.synthetic_click_event(Modifiers::empty()) else { return false };
-        self.script_dispatch(nid, wrap(pe));
-        true
-    }
-
-    pub fn script_hover(&mut self, selector: &str) -> bool {
-        self.script_pointer(selector, blitz_traits::events::DomEventData::PointerEnter)
-    }
-
-    pub fn script_unhover(&mut self, selector: &str) -> bool {
-        self.script_pointer(selector, blitz_traits::events::DomEventData::PointerLeave)
-    }
-
-    pub fn script_rclick(&mut self, selector: &str) -> bool {
-        self.script_pointer(selector, blitz_traits::events::DomEventData::ContextMenu)
-    }
-
-    pub fn script_wheel(&mut self, selector: &str, dy: f64) -> bool {
-        use blitz_traits::events::{
-            BlitzWheelDelta, BlitzWheelEvent, DomEventData as D, MouseEventButtons, PointerCoords,
-        };
-        let Some(nid) = self.resolve(selector) else { return false };
-        let ev = BlitzWheelEvent {
-            delta: BlitzWheelDelta::Pixels(0.0, dy),
-            coords: PointerCoords {
-                page_x: 0.0,
-                page_y: 0.0,
-                screen_x: 0.0,
-                screen_y: 0.0,
-                client_x: 0.0,
-                client_y: 0.0,
-            },
-            buttons: MouseEventButtons::empty(),
-            mods: Modifiers::empty(),
-        };
-        self.script_dispatch(nid, D::Wheel(ev));
-        true
-    }
-
-    /// Press a named key through the real keyboard pipeline (goes to the
-    /// focused element, exactly like a physical key).
-    pub fn script_key(&mut self, name: &str) -> bool {
-        let (key, code) = match name {
-            "Enter" => (Key::Enter, Code::Enter),
-            "Escape" => (Key::Escape, Code::Escape),
-            "Tab" => (Key::Tab, Code::Tab),
-            "End" => (Key::End, Code::End),
-            "Home" => (Key::Home, Code::Home),
-            _ => return false,
-        };
-        let k = BlitzKeyEvent {
-            key,
-            code,
-            modifiers: Modifiers::empty(),
-            location: Location::Standard,
-            is_auto_repeating: false,
-            is_composing: false,
-            state: KeyState::Pressed,
-            text: None,
-        };
-        self.handle_ui_event(UiEvent::KeyDown(k));
-        true
-    }
-
-    /// Serialize the active tab's guest mount subtree as indented pseudo-HTML.
-    pub fn dump_dom(&self, path: &str) -> std::io::Result<()> {
-        let mut out = String::new();
-        if let Some(tab) = self.tabs.get(self.active_idx) {
-            if let Some(&root) = tab.maps.fwd.get(&1) {
-                self.dump_node(root, 0, &mut out);
-            }
-        }
-        std::fs::write(path, out)
-    }
-
-    /// DEBUG: dump the whole #app subtree (every tab's mount div, with its
-    /// inline style attribute) — temporary, for diagnosing tab-visibility bugs.
-    pub fn dump_app(&self, path: &str) -> std::io::Result<()> {
-        let mut out = String::new();
-        self.dump_node(self.chrome.shell, 0, &mut out);
-        std::fs::write(path, out)
-    }
-
-    fn dump_node(&self, id: usize, depth: usize, out: &mut String) {
-        let Some(node) = self.doc.get_node(id) else { return };
-        let indent = "  ".repeat(depth);
-        if let Some(el) = node.element_data() {
-            out.push_str(&indent);
-            out.push('<');
-            out.push_str(&el.name.local);
-            for attr in el.attrs.iter() {
-                out.push(' ');
-                out.push_str(&attr.name.local);
-                out.push_str("=\"");
-                out.push_str(&attr.value);
-                out.push('"');
-            }
-            out.push_str(&format!(
-                " layout=(x={:.1},y={:.1},w={:.1},h={:.1})",
-                node.final_layout.location.x,
-                node.final_layout.location.y,
-                node.final_layout.size.width,
-                node.final_layout.size.height,
-            ));
-            out.push_str(">\n");
-            for &child in node.children.iter() {
-                self.dump_node(child, depth + 1, out);
-            }
-        } else if let Some(text) = node.text_data() {
-            let t = text.content.trim();
-            if !t.is_empty() {
-                out.push_str(&indent);
-                out.push('"');
-                out.push_str(t);
-                out.push_str("\"\n");
-            }
-        } else {
-            for &child in node.children.iter() {
-                self.dump_node(child, depth + 1, out);
-            }
-        }
-    }
 
     /// Deliver a completed fetch to whichever tab owns it (`r.tab_id`),
     /// regardless of whether that tab is currently active — an in-flight
@@ -1417,7 +959,7 @@ impl GwbDocument {
             return;
         };
         let Some(rt) = self.tabs[idx].guest.as_mut() else { return };
-        let cap = rt.shared.lock().unwrap().event_region.1 as usize;
+        let cap = rt.shared.lock_ok().event_region.1 as usize;
         let max_body = cap.saturating_sub(64);
         let mut body = r.body.clone();
         if body.len() > max_body {
@@ -1438,7 +980,7 @@ impl GwbDocument {
                     self.dirty = true;
                 }
             }
-            Err(e) => crate::logger::log("crash", &format!("net delivery failed: {e:#}")),
+            Err(e) => self.guest_call_failed(idx, "net delivery", e),
         }
     }
 
@@ -1450,7 +992,7 @@ impl GwbDocument {
             return;
         };
         let Some(rt) = self.tabs[idx].guest.as_mut() else { return };
-        let cap = rt.shared.lock().unwrap().event_region.1 as usize;
+        let cap = rt.shared.lock_ok().event_region.1 as usize;
         let max_body = cap.saturating_sub(64);
         let mut body = r.body.clone();
         if body.len() > max_body {
@@ -1471,7 +1013,7 @@ impl GwbDocument {
                     self.dirty = true;
                 }
             }
-            Err(e) => crate::logger::log("crash", &format!("rpc delivery failed: {e:#}")),
+            Err(e) => self.guest_call_failed(idx, "rpc delivery", e),
         }
     }
 
@@ -1502,6 +1044,10 @@ impl GwbDocument {
         if tab.maps.observers.is_empty() || tab.guest.is_none() {
             return false;
         }
+        // Rects must come from current layout (and stale layout_parent ids
+        // would panic in absolute_position; see resolve_if_stale).
+        self.resolve_if_stale();
+        let Some(tab) = self.tabs.get(idx) else { return false };
         // Collect changed rects first (read-only pass over the layout tree).
         let mut changes: Vec<(u32, [f32; 4])> = Vec::new();
         for (&gid, &what) in &tab.maps.observers {
@@ -1523,9 +1069,9 @@ impl GwbDocument {
         for (gid, rect) in &changes {
             self.tabs[idx].maps.last_rects.insert(*gid, *rect);
             let eo = crate::abi::EventOut::layout_rect(*rect);
-            let Some(rt) = self.tabs[idx].guest.as_mut() else { continue };
+            let Some(rt) = self.tabs[idx].guest.as_mut() else { break };
             if let Err(e) = rt.deliver_event(&eo, 0, *gid, *gid) {
-                crate::logger::log("crash", &format!("observation delivery failed: {e:#}"));
+                self.guest_call_failed(idx, "observation delivery", e);
             }
         }
         let applied = self.apply_guest_batches_for(idx);
@@ -1597,7 +1143,7 @@ impl GwbDocument {
             html.push_str("</div>");
         }
         let mut mutr = self.doc.mutate();
-        mutr.set_inner_html(self.log_node, &html);
+        mutr.set_html(self.log_node, &html);
         drop(mutr);
         self.dirty = true;
     }
@@ -1621,7 +1167,7 @@ impl Document for GwbDocument {
         let active = self.active_idx;
         if let Some(tab) = self.tabs.get_mut(active) {
             if let Some(rt) = tab.guest.as_mut() {
-                let wanted = std::mem::take(&mut rt.shared.lock().unwrap().frame_requested);
+                let wanted = std::mem::take(&mut rt.shared.lock_ok().frame_requested);
                 if wanted {
                     let now = std::time::Instant::now();
                     let dt = self
@@ -1630,7 +1176,8 @@ impl Document for GwbDocument {
                         .unwrap_or(16.6);
                     self.last_frame = Some(now);
                     if let Err(e) = rt.deliver_frame(dt) {
-                        crate::logger::log("crash", &format!("gwb_frame failed: {e:#}"));
+                        self.guest_call_failed(active, "gwb_frame", e);
+                        dirty = true;
                     }
                     if self.apply_active_guest_batches() > 0 {
                         dirty = true;
@@ -1641,6 +1188,11 @@ impl Document for GwbDocument {
 
         if self.check_observations() {
             dirty = true;
+        }
+        if dirty {
+            // A redraw (and Blitz's resolve) is coming, but input can arrive
+            // first; see `resolve_if_stale`.
+            self.layout_stale = true;
         }
         dirty
     }
@@ -1826,11 +1378,11 @@ impl EventHandler for ShellEventHandler<'_> {
         // this call at all.
         let is_gesture = matches!(eo.kind, crate::abi::ev::CLICK | crate::abi::ev::KEY_DOWN);
         if is_gesture {
-            rt.shared.lock().unwrap().gesture_active = true;
+            rt.shared.lock_ok().gesture_active = true;
         }
         let dispatch_result = rt.deliver_event(&eo, record_flags, target, listener);
         if is_gesture {
-            rt.shared.lock().unwrap().gesture_active = false;
+            rt.shared.lock_ok().gesture_active = false;
         }
         match dispatch_result {
             Ok(flags) => {
@@ -1850,315 +1402,15 @@ impl EventHandler for ShellEventHandler<'_> {
                 if flags & 2 != 0 {
                     event_state.stop_propagation();
                 }
-                if !rt.shared.lock().unwrap().batches.is_empty() {
+                if !rt.shared.lock_ok().batches.is_empty() {
                     event.request_redraw = true;
                 }
             }
-            Err(e) => crate::logger::log("crash", &format!("guest event handler failed: {e:#}")),
-        }
-    }
-}
-
-/// Application wrapper: delegates to BlitzApplication, intercepts
-/// `Embedder(ConsoleMsg)` events, and buffers any that arrive before the
-/// window surface exists.
-pub struct GwbApplication {
-    inner: BlitzApplication<VelloWindowRenderer>,
-    pending: Vec<Arc<ConsoleMsg>>,
-}
-
-impl GwbApplication {
-    pub fn new(inner: BlitzApplication<VelloWindowRenderer>) -> Self {
-        Self {
-            inner,
-            pending: Vec::new(),
-        }
-    }
-
-    pub fn add_window(&mut self, window: WindowConfig<VelloWindowRenderer>) {
-        self.inner.add_window(window);
-    }
-
-    fn deliver(&mut self, msg: &ConsoleMsg) {
-        for window in self.inner.windows.values_mut() {
-            let doc = window.downcast_doc_mut::<GwbDocument>();
-            doc.push_chunk(msg.source, &msg.bytes);
-            window.poll();
-            window.request_redraw();
-        }
-    }
-
-    fn flush_pending(&mut self) {
-        if self.inner.windows.is_empty() {
-            return;
-        }
-        for msg in std::mem::take(&mut self.pending) {
-            self.deliver(&msg);
-        }
-    }
-
-    fn handle_script_cmd(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        cmd: &crate::script::ScriptCmd,
-    ) {
-        use crate::script::ScriptCmd as C;
-        if let C::Quit = cmd {
-            crate::logger::log("script", "quit");
-            event_loop.exit();
-            return;
-        }
-        let Some(window) = self.inner.windows.values_mut().next() else {
-            crate::logger::log("script", "command before window exists; dropped");
-            return;
-        };
-        let doc = window.downcast_doc_mut::<GwbDocument>();
-        match cmd {
-            C::Click(sel) => {
-                let ok = doc.script_click(sel);
-                crate::logger::log("script", &format!("click {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
-            }
-            C::Type(text) => {
-                doc.script_type(text);
-                crate::logger::log("script", &format!("type \"{text}\""));
-            }
-            C::Focus(sel) => {
-                let ok = doc.script_focus(sel);
-                crate::logger::log("script", &format!("focus {sel}: {}", if ok { "ok" } else { "NO MATCH" }));
-            }
-            C::Hover(sel) => {
-                let ok = doc.script_hover(sel);
-                crate::logger::log("script", &format!("hover {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
-            }
-            C::Unhover(sel) => {
-                let ok = doc.script_unhover(sel);
-                crate::logger::log("script", &format!("unhover {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
-            }
-            C::RClick(sel) => {
-                let ok = doc.script_rclick(sel);
-                crate::logger::log("script", &format!("rclick {sel}: {}", if ok { "hit" } else { "NO MATCH" }));
-            }
-            C::Key(name) => {
-                let ok = doc.script_key(name);
-                crate::logger::log("script", &format!("key {name}: {}", if ok { "sent" } else { "UNKNOWN KEY" }));
-            }
-            C::Wheel(sel, dy) => {
-                let ok = doc.script_wheel(sel, *dy);
-                crate::logger::log("script", &format!("wheel {sel} {dy}: {}", if ok { "hit" } else { "NO MATCH" }));
-            }
-            C::Dump(path) => match doc.dump_dom(path) {
-                Ok(()) => crate::logger::log("script", &format!("dumped DOM to {path}")),
-                Err(e) => crate::logger::log("script", &format!("dump {path} FAILED: {e}")),
-            },
-            C::DumpApp(path) => match doc.dump_app(path) {
-                Ok(()) => crate::logger::log("script", &format!("dumped #app to {path}")),
-                Err(e) => crate::logger::log("script", &format!("dumpapp {path} FAILED: {e}")),
-            },
-            C::Navigate(target) => {
-                doc.navigate_active(target);
-                crate::logger::log("script", &format!("navigate {target}"));
-            }
-            C::Back => {
-                doc.back_script();
-                crate::logger::log("script", "back");
-            }
-            C::Forward => {
-                doc.forward_script();
-                crate::logger::log("script", "forward");
-            }
-            C::Reload => {
-                doc.reload_script();
-                crate::logger::log("script", "reload");
-            }
-            C::NewTab(target) => {
-                doc.new_tab_script(target);
-                crate::logger::log("script", &format!("newtab {target}"));
-            }
-            C::CloseTab => {
-                doc.close_active_tab_script();
-                crate::logger::log("script", "closetab");
-            }
-            C::SwitchTab(idx) => {
-                doc.switch_tab_script(*idx);
-                crate::logger::log("script", &format!("switchtab {idx}"));
-            }
-            C::Quit => unreachable!(),
-        }
-        window.poll();
-        window.request_redraw();
-    }
-}
-
-impl ApplicationHandler for GwbApplication {
-    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.inner.resumed(event_loop);
-    }
-
-    fn suspended(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.inner.suspended(event_loop);
-    }
-
-    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.inner.can_create_surfaces(event_loop);
-        crate::logger::log(
-            "ui",
-            &format!("window surface(s) created ({} window)", self.inner.windows.len()),
-        );
-        // Give each GWB document its window id (request_frame wake-ups).
-        let ids: Vec<WindowId> = self.inner.windows.keys().copied().collect();
-        for id in ids {
-            if let Some(window) = self.inner.windows.get_mut(&id) {
-                window.downcast_doc_mut::<GwbDocument>().set_window_id(id);
-            }
-        }
-        self.flush_pending();
-    }
-
-    fn destroy_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.inner.destroy_surfaces(event_loop);
-    }
-
-    fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: StartCause) {
-        self.inner.new_events(event_loop, cause);
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
-            crate::logger::log("ui", &format!("window event: {event:?}"));
-        }
-        // Console divider drag: tracked at window level so fast pointer moves
-        // can't escape the 6px divider (the DOM pointer-down on #divider
-        // starts it; any button release ends it).
-        if let Some(window) = self.inner.windows.get_mut(&window_id) {
-            let doc = window.downcast_doc_mut::<GwbDocument>();
-            if doc.console_drag_active() {
-                match &event {
-                    WindowEvent::PointerMoved { position, .. } => {
-                        doc.drag_console_to(position.y);
-                        window.poll();
-                        window.request_redraw();
-                        return; // consumed: no hover churn mid-drag
-                    }
-                    WindowEvent::PointerButton { state, .. } if !state.is_pressed() => {
-                        doc.end_console_drag();
-                        // fall through so blitz clears its pressed-button state
-                    }
-                    _ => {}
+            Err(e) => {
+                crate::logger::log("crash", &format!("guest event handler failed: {e:#}"));
+                if let Some(why) = crate::abi::guest_fault(&e) {
+                    self.actions.push(ChromeAction::GuestFault(why));
                 }
-            }
-        }
-        // Raw-input diagnostics: does the OS event reach us at all?
-        if let WindowEvent::PointerButton { state, position, .. } = &event {
-            if state.is_pressed() {
-                crate::logger::log(
-                    "hit",
-                    &format!("raw pointer-down physical=({:.0},{:.0})", position.x, position.y),
-                );
-            }
-        }
-        // Capture window-level facts the guest may subscribe to before the
-        // event is consumed by the inner application.
-        let notify: Option<crate::abi::EventOut> = match &event {
-            WindowEvent::SurfaceResized(size) => {
-                Some(crate::abi::EventOut::window_resize(size.width as f32, size.height as f32, 1.0))
-            }
-            WindowEvent::ThemeChanged(theme) => Some(crate::abi::EventOut::theme_change(matches!(
-                theme,
-                winit::window::Theme::Dark
-            ))),
-            _ => None,
-        };
-        self.inner.window_event(event_loop, window_id, event);
-        if let Some(eo) = notify {
-            if let Some(window) = self.inner.windows.get_mut(&window_id) {
-                let doc = window.downcast_doc_mut::<GwbDocument>();
-                if eo.kind == crate::abi::ev::WINDOW_RESIZE {
-                    doc.clamp_console_to_window();
-                }
-                doc.notify_window_event(eo);
-                window.poll();
-                window.request_redraw();
-            }
-        }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.inner.about_to_wait(event_loop);
-        // Frame pump: deliver pending gwb_frame ticks, paced by the redraw
-        // stream (poll -> dirty -> request_redraw -> vsync present -> next
-        // about_to_wait). Idle guests cost nothing here.
-        let mut should_exit = false;
-        for window in self.inner.windows.values_mut() {
-            let doc = window.downcast_doc_mut::<GwbDocument>();
-            let pending = doc.frame_pending();
-            if doc.close_window_requested() {
-                should_exit = true;
-            }
-            if pending {
-                window.poll();
-                window.request_redraw();
-            }
-        }
-        if should_exit {
-            crate::logger::log("ui", "last tab closed; exiting");
-            event_loop.exit();
-        }
-    }
-
-    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-        while let Ok(event) = self.inner.event_queue.try_recv() {
-            match event {
-                BlitzShellEvent::Embedder(payload) => {
-                    match payload.downcast::<ConsoleMsg>() {
-                        Ok(msg) => {
-                            if self.inner.windows.is_empty() {
-                                self.pending.push(msg);
-                            } else {
-                                self.flush_pending();
-                                self.deliver(&msg);
-                            }
-                        }
-                        Err(other) => match other.downcast::<crate::script::ScriptCmd>() {
-                            Ok(cmd) => self.handle_script_cmd(event_loop, &cmd),
-                            Err(other) => match other.downcast::<crate::abi::NetResult>() {
-                                Ok(net) => {
-                                    for window in self.inner.windows.values_mut() {
-                                        let doc = window.downcast_doc_mut::<GwbDocument>();
-                                        doc.deliver_net_result(&net);
-                                        window.poll();
-                                        window.request_redraw();
-                                    }
-                                }
-                                Err(other) => match other.downcast::<crate::abi::RpcResult>() {
-                                    Ok(rpc) => {
-                                        for window in self.inner.windows.values_mut() {
-                                            let doc = window.downcast_doc_mut::<GwbDocument>();
-                                            doc.deliver_rpc_result(&rpc);
-                                            window.poll();
-                                            window.request_redraw();
-                                        }
-                                    }
-                                    Err(other) => {
-                                        if let Ok(nav) = other.downcast::<crate::abi::NavRequest>() {
-                                            for window in self.inner.windows.values_mut() {
-                                                let doc = window.downcast_doc_mut::<GwbDocument>();
-                                                doc.deliver_nav_request(&nav);
-                                                window.poll();
-                                                window.request_redraw();
-                                            }
-                                        }
-                                    }
-                                },
-                            },
-                        },
-                    }
-                }
-                event => self.inner.handle_blitz_shell_event(event_loop, event),
             }
         }
     }

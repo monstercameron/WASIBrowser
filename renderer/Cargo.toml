@@ -8,19 +8,21 @@ anyhow = "1.0.103"
 wasmtime = "46.0.1"
 wasmtime-wasi = "46.0.1"
 
-# Blitz engine — PATH DEPS on the local checkout (C:\src\blitz, branch
-# gwb-perf off f550417) so we can carry performance patches.
-# Was crates.io =0.3.0-alpha.6.
-blitz-dom = { path = "C:/src/blitz/packages/blitz-dom", features = ["scrollbars"] }
-blitz-html = { path = "C:/src/blitz/packages/blitz-html" }
-blitz-shell = { path = "C:/src/blitz/packages/blitz-shell" }
-blitz-traits = { path = "C:/src/blitz/packages/blitz-traits" }
+# Blitz engine — pinned to upstream DioxusLabs/blitz at f550417 so a fresh
+# clone builds anywhere. The `gwb-perf` branch (three blitz-dom perf patches
+# on top of this same commit, see docs/BENCHMARKS.md "round 2") can be swapped
+# in WITHOUT editing this file — see renderer/README.md ("Using a local
+# Blitz checkout"): a git-ignored .cargo/config.toml `[patch]` override.
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "f5504174400e43d4b0786610b4c4ecf9483afc4c", features = ["scrollbars"] }
+blitz-html = { git = "https://github.com/DioxusLabs/blitz", rev = "f5504174400e43d4b0786610b4c4ecf9483afc4c" }
+blitz-shell = { git = "https://github.com/DioxusLabs/blitz", rev = "f5504174400e43d4b0786610b4c4ecf9483afc4c" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "f5504174400e43d4b0786610b4c4ecf9483afc4c" }
 # Native overlay scrollbar (thumb geometry, hover fade, drag-to-scroll) is
 # built into blitz-dom/blitz-paint already — it's opt-in via this feature,
 # off by default. blitz-shell already depends on blitz-paint; declaring it
 # here too (with the feature on) unifies into the SAME crate instance in
 # the build graph, so blitz-shell's internal paint_scene call picks it up.
-blitz-paint = { path = "C:/src/blitz/packages/blitz-paint", features = ["scrollbars"] }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "f5504174400e43d4b0786610b4c4ecf9483afc4c", features = ["scrollbars"] }
 anyrender_vello = "0.12"
 winit = "=0.31.0-beta.2"
 
@@ -29,7 +31,14 @@ tokio = "1.42"
 chrono = "0.4.45"
 atomic_refcell = "0.1"
 keyboard-types = "0.7"
-ureq = "2"
+# native-tls (SChannel / Security.framework / OpenSSL) instead of the default
+# rustls+ring: ring needs a C toolchain (clang on Windows ARM64) to build.
+ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+native-tls = "0.2"
+url = "2"
+# Guest stylesheet scoping (css_scope.rs) — same tokenizer version Stylo uses.
+cssparser = "0.37"
+html-escape = "0.2"
 # RPC channel auth (docs/04-WEB-RPC.md §2/§3): app-scoped ed25519 key signs
 # every request over canonical bytes; sha256 of the body; base64 headers.
 ed25519-dalek = "2"

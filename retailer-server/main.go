@@ -14,8 +14,10 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -156,11 +158,28 @@ func writeErr(w http.ResponseWriter, e *rpcError) {
 	writeJSON(w, e.Status, map[string]any{"error": e.Msg})
 }
 
+// isLoopback reports whether a listen address only accepts local connections.
+// An empty host (":8789") listens on every interface, so it is not loopback.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8789", "listen address")
-	insecure := flag.Bool("dev-insecure", false, "skip L1 channel signature verification (curl testing)")
+	insecure := flag.Bool("dev-insecure", false, "skip L1 channel signature verification (curl testing; loopback only)")
 	flag.Parse()
 
+	if *insecure && !isLoopback(*addr) {
+		log.Fatal(fmt.Errorf("refusing -dev-insecure on non-loopback address %s", *addr))
+	}
 	s := newServer(!*insecure)
 	mux := http.NewServeMux()
 	mux.Handle("/rpc/", s)

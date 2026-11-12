@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html><head><style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; background: #1e1f22; color: #e8e8e8;
+         font-family: 'Segoe UI', sans-serif; }
+  #shell { flex: 1 1 auto; min-height: 0; display: flex; background: #17181a; }
+  #shell.layout-top { flex-direction: column; }
+  #shell.layout-side { flex-direction: row; }
+  /* Tab strip sits a shade darker than the toolbar below it — the active
+     chip's top accent + matching body color is what visually welds it to
+     the content, so the strip itself can stay quiet. */
+  #tabstrip { flex: 0 0 auto; display: flex; gap: 4px; background: #101113;
+              overflow: auto; align-items: center; }
+  #shell.layout-top #tabstrip { flex-direction: row; padding: 8px 8px 0; }
+  #shell.layout-side #tabstrip { flex-direction: column; align-items: stretch;
+                                  width: 200px; padding: 8px 0 8px 8px; }
+  .tab-chip { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+              color: #9a9fa6; background: transparent; border: none;
+              border-top: 2px solid transparent; border-radius: 6px 6px 0 0;
+              padding: 7px 10px 6px; cursor: pointer; white-space: nowrap;
+              max-width: 220px; overflow: hidden; transition: color .1s ease; }
+  #shell.layout-side .tab-chip { border-top: none; border-left: 2px solid transparent;
+                                  border-radius: 6px; }
+  .tab-chip:hover { color: #e8e8e8; background: rgba(255,255,255,0.04); }
+  .tab-chip.active { background: #26282c; border-top-color: #5b9dff; color: #f2f3f5; }
+  #shell.layout-side .tab-chip.active { border-top-color: transparent; border-left-color: #5b9dff; }
+  .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-close { opacity: 0; width: 15px; height: 15px; display: flex; align-items: center;
+               justify-content: center; border-radius: 4px; font-size: 12px; line-height: 1; }
+  .tab-chip:hover .tab-close, .tab-chip.active .tab-close { opacity: 0.6; }
+  .tab-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.16); }
+  #btn-newtab { flex: 0 0 auto; margin: 0 4px 6px; }
+  #maincol { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+             background: #26282c; }
+  #toolbar { flex: 0 0 auto; display: flex; align-items: center;
+             justify-content: space-between; padding: 7px 12px; gap: 14px;
+             border-bottom: 1px solid #313438; }
+  #addressbar { flex: 0 1 auto; width: 600px; min-width: 0; display: flex; gap: 4px;
+                align-items: center; background: #1a1b1d; border: 1px solid #3a3d41;
+                border-radius: 8px; padding: 3px; transition: border-color .12s ease,
+                box-shadow .12s ease; }
+  #addressbar:focus-within { border-color: #5b9dff; box-shadow: 0 0 0 3px rgba(91,157,255,0.18); }
+  #ab-input { flex: 1 1 auto; min-width: 0; font-size: 12.5px; padding: 5px 8px;
+              border: none; background: transparent;
+              color: #e8e8e8; font-family: Consolas, 'Cascadia Mono', monospace; }
+  #ab-input::placeholder { color: #6b7076; }
+  .tb-btn { font-size: 12px; color: #c9cdd3; background: #313438;
+            border: 1px solid transparent; border-radius: 6px; padding: 5px 11px;
+            cursor: pointer; font-family: 'Segoe UI', sans-serif; }
+  .tb-btn:hover { background: #3a3e44; color: #ffffff; }
+  .tb-icon { min-width: 30px; display: flex; align-items: center; justify-content: center;
+             padding: 5px 7px; font-size: 13px; background: transparent; border: none;
+             border-radius: 6px; color: #9fa4ab; }
+  .tb-icon:hover { background: rgba(255,255,255,0.08); color: #ffffff; }
+  #toolbar-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+  #tb-menu, #tb-bookmarks { width: 30px; height: 28px; display: flex; flex-direction: column;
+             align-items: center; justify-content: center; gap: 3px; background: transparent;
+             border: none; border-radius: 6px; cursor: pointer; flex: 0 0 auto; }
+  #tb-menu:hover, #tb-bookmarks:hover { background: rgba(255,255,255,0.08); }
+  .kebab-dot { width: 3px; height: 3px; border-radius: 50%; background: #9fa4ab; }
+  #tb-menu:hover .kebab-dot { background: #e8e8e8; }
+  .hbar { width: 14px; height: 2px; border-radius: 1px; background: #9fa4ab; }
+  #tb-bookmarks:hover .hbar { background: #e8e8e8; }
+  #ab-bookmark { font-weight: 700; color: #9fa4ab; }
+  /* Normal-flow expanding row (same reasoning as #toolbar-menu below): a
+     floating overlay via position:absolute is unreliable inside nested flex
+     containers in this engine's layout (Taffy). */
+  #bookmarks-panel { display: none; flex: 0 0 auto; flex-direction: column;
+                     background: #202225; border-bottom: 1px solid #3a3d41; }
+  .bm-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+            border-bottom: 1px solid #2a2c30; cursor: pointer; }
+  .bm-row:hover { background: #26282c; }
+  .bm-title { font-size: 12.5px; color: #e8e8e8; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; flex: 1 1 auto; min-width: 0; }
+  .bm-url { font-size: 11px; color: #6b7076; font-family: Consolas, 'Cascadia Mono', monospace;
+            flex: 0 0 auto; }
+  .bm-remove { flex: 0 0 auto; font-size: 11px; color: #9fa4ab; padding: 3px 8px;
+               border-radius: 5px; background: transparent; border: none; cursor: pointer;
+               font-family: 'Segoe UI', sans-serif; }
+  .bm-remove:hover { background: rgba(255,138,128,0.15); color: #ff8a80; }
+  .bm-empty { padding: 14px; font-size: 12.5px; color: #6b7076; text-align: center; }
+  /* Normal-flow expanding row (like #console's own show/hide), not a
+     floating overlay — position:absolute inside nested flex containers is
+     unreliable in this engine's layout (Taffy), so the menu pushes #app
+     down instead of floating above it. */
+  #toolbar-menu { display: none; flex: 0 0 auto; flex-direction: row; flex-wrap: wrap;
+                  gap: 6px; padding: 8px 12px; background: #202225;
+                  border-bottom: 1px solid #3a3d41; }
+  .menu-item { background: #313438; border: 1px solid transparent; color: #c9cdd3;
+               font-size: 12px; padding: 5px 11px; border-radius: 6px; cursor: pointer;
+               font-family: 'Segoe UI', sans-serif; }
+  .menu-item:hover { background: #3a3e44; color: #ffffff; }
+  #app { flex: 1 1 auto; min-height: 0; overflow-y: auto; position: relative; }
+  /* display:flex (not plain block) so the guest's top-level div is a flex
+     ITEM here and gets Taffy's flex cross-axis stretch sizing for free —
+     plain block width:100% on a guest's own root div was observed to be
+     silently ignored (computed via shrink-to-fit instead) whenever a
+     display:grid descendant existed anywhere in that guest's subtree. */
+  /* Host-owned per-tab wrapper. position:relative + overflow:hidden makes it
+     the containing block AND clip for every guest box (Blitz lays out
+     position:fixed as absolute), so guest content can't paint over the tab
+     strip / address bar. z-index:0 keeps guest z-indexes inside it. */
+  .mount-wrap { flex-direction: column; min-height: 100%; position: relative;
+                overflow: hidden; z-index: 0; }
+  .mount { display: flex; flex-direction: column; min-height: 100%; flex: 1 0 auto; }
+  .guest-styles { display: none; }
+  /* No element styling inside .mount: guest apps own their look entirely.
+     Guest <style> sheets are scoped to their own .mount (css_scope.rs). */
+  #divider { flex: 0 0 auto; height: 6px; background: #26282c;
+             border-top: 1px solid #3a3d41; cursor: row-resize; }
+  #divider:hover { background: #5b9dff; }
+  /* Fixed height (host-adjusted by dragging #divider): the console NEVER
+     grows with message count — #console-log overflow-scrolls instead. */
+  #console { flex: 0 0 auto; height: 240px; min-height: 0; display: flex;
+             flex-direction: column; background: #161719; }
+  #console-title { flex: 0 0 auto; padding: 6px 12px; font-size: 12px;
+                   color: #9a9fa6; background: #222427;
+                   border-bottom: 1px solid #3a3d41;
+                   font-family: Consolas, monospace; }
+  #console-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex;
+                 flex-direction: column-reverse; padding: 8px 12px;
+                 font-family: Consolas, 'Cascadia Mono', monospace;
+                 font-size: 13px; line-height: 1.5; }
+  .ln { white-space: pre-wrap; }
+  .out { color: #d7d9dd; }
+  .err { color: #ff8a80; }
+  .host { color: #82aaff; }
+</style></head>
+<body>
+  <div id="shell" class="layout-top">
+    <div id="tabstrip">
+      <button id="btn-newtab" class="tb-icon" title="New tab">+</button>
+    </div>
+    <div id="maincol">
+      <header id="toolbar">
+        <div id="addressbar">
+          <button id="ab-back" class="tb-icon" title="Back">&larr;</button>
+          <button id="ab-fwd" class="tb-icon" title="Forward">&rarr;</button>
+          <button id="ab-reload" class="tb-btn" title="Reload">reload</button>
+          <input id="ab-input" type="text" placeholder="web://name or path.wasm" value="" />
+          <button id="ab-go" class="tb-btn">go</button>
+          <button id="ab-bookmark" class="tb-icon" title="Bookmark this page">*</button>
+        </div>
+        <div id="toolbar-actions">
+          <button id="tb-bookmarks" class="tb-icon" title="Bookmarks">
+            <span class="hbar"></span><span class="hbar"></span><span class="hbar"></span>
+          </button>
+          <button id="tb-menu" title="More">
+            <span class="kebab-dot"></span><span class="kebab-dot"></span><span class="kebab-dot"></span>
+          </button>
+        </div>
+      </header>
+      <div id="toolbar-menu">
+        <button id="tb-tabpos" class="menu-item">tabs: top</button>
+        <button id="tb-theme" class="menu-item">dark mode</button>
+        <button id="tb-clear" class="menu-item">clear console</button>
+        <button id="tb-console" class="menu-item">hide console</button>
+      </div>
+      <div id="bookmarks-panel">
+        <div id="bookmarks-empty" class="bm-empty">No bookmarks yet — click the * next to the address bar to save this page.</div>
+      </div>
+      <main id="app"></main>
+      <div id="divider"></div>
+      <footer id="console">
+        <div id="console-title">console — drag the bar above to resize</div>
+        <div id="console-log"></div>
+      </footer>
+    </div>
+  </div>
+</body></html>

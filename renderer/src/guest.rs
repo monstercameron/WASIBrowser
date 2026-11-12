@@ -73,7 +73,7 @@ impl tokio::io::AsyncWrite for ConsolePipe {
 
 /// Run the guest on a background thread; host status lines go to the console
 /// on the Host stream.
-pub fn spawn_guest(wasm_path: String, proxy: BlitzShellProxy) {
+pub fn spawn_guest(engine: Engine, wasm_path: String, proxy: BlitzShellProxy) {
     std::thread::spawn(move || {
         let host = ConsolePipe {
             source: Source::Host,
@@ -83,7 +83,7 @@ pub fn spawn_guest(wasm_path: String, proxy: BlitzShellProxy) {
 
         host_line(format!("[host] loading {wasm_path}"));
         let started = std::time::Instant::now();
-        match run_guest(&wasm_path, &proxy) {
+        match run_guest(&engine, &wasm_path, &proxy) {
             Ok(status) => host_line(format!(
                 "[host] guest exited with status {status} after {:.1?}",
                 started.elapsed()
@@ -93,17 +93,25 @@ pub fn spawn_guest(wasm_path: String, proxy: BlitzShellProxy) {
     });
 }
 
-fn run_guest(path: &str, proxy: &BlitzShellProxy) -> Result<i32> {
-    let engine = Engine::default();
+/// Legacy console guests run to completion on their own thread; give them a
+/// generous CPU budget so a runaway one is eventually stopped too.
+const LEGACY_BUDGET_TICKS: u64 = 6000; // 60 s at abi::EPOCH_TICK
+
+struct LegacyState {
+    wasi: WasiP1Ctx,
+    limits: wasmtime::StoreLimits,
+}
+
+fn run_guest(engine: &Engine, path: &str, proxy: &BlitzShellProxy) -> Result<i32> {
     let compile_started = std::time::Instant::now();
-    let module = Module::from_file(&engine, path)?;
+    let module = Module::from_file(engine, path)?;
     crate::logger::log(
         "guest",
         &format!("module compiled from {path} in {:.1?}", compile_started.elapsed()),
     );
 
-    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
-    wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |cx| cx)?;
+    let mut linker: Linker<LegacyState> = Linker::new(engine);
+    wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |s: &mut LegacyState| &mut s.wasi)?;
 
     // stdout/stderr only — no filesystem, no network, no env.
     let wasi = WasiCtxBuilder::new()
@@ -116,7 +124,9 @@ fn run_guest(path: &str, proxy: &BlitzShellProxy) -> Result<i32> {
             proxy: proxy.clone(),
         })
         .build_p1();
-    let mut store = Store::new(&engine, wasi);
+    let mut store = Store::new(engine, LegacyState { wasi, limits: crate::abi::guest_store_limits() });
+    store.limiter(|s| &mut s.limits);
+    store.set_epoch_deadline(LEGACY_BUDGET_TICKS);
 
     let instance = linker.instantiate(&mut store, &module)?;
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;

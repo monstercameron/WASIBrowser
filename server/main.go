@@ -17,8 +17,10 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -74,10 +76,14 @@ type server struct {
 }
 
 func newServer(requireChannel bool) *server {
+	return newServerWith(requireChannel, true)
+}
+
+func newServerWith(requireChannel, demoUsers bool) *server {
 	pub, priv, _ := ed25519.GenerateKey(nil) // server session-signing key
 	s := &server{
 		methods: map[string]map[string]route{},
-		store:   newStore(),
+		store:   newStore(demoUsers),
 		auth:    &authConfig{serverPriv: priv, serverPub: pub, requireChannel: requireChannel},
 	}
 	s.routes()
@@ -204,12 +210,45 @@ func writeErr(w http.ResponseWriter, e *rpcError) {
 	writeJSON(w, e.Status, map[string]any{"error": e.Msg})
 }
 
+// isLoopback reports whether a listen address only accepts local connections.
+// An empty host (":8787") listens on every interface, so it is not loopback.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// checkDevFlags refuses dev-only conveniences (unsigned requests, demo
+// accounts with published passwords) on any address other than loopback.
+func checkDevFlags(addr string, insecure, demoUsers bool) error {
+	if isLoopback(addr) {
+		return nil
+	}
+	if insecure {
+		return fmt.Errorf("refusing -dev-insecure on non-loopback address %s", addr)
+	}
+	if demoUsers {
+		return fmt.Errorf("refusing demo accounts (well-known passwords) on non-loopback address %s; pass -demo-users=false", addr)
+	}
+	return nil
+}
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8787", "listen address")
-	insecure := flag.Bool("dev-insecure", false, "skip L1 channel signature verification (curl testing)")
+	insecure := flag.Bool("dev-insecure", false, "skip L1 channel signature verification (curl testing; loopback only)")
+	demo := flag.Bool("demo-users", true, "seed demo accounts with well-known passwords (loopback only)")
 	flag.Parse()
 
-	s := newServer(!*insecure)
+	if err := checkDevFlags(*addr, *insecure, *demo); err != nil {
+		log.Fatal(err)
+	}
+	s := newServerWith(!*insecure, *demo)
 	mux := http.NewServeMux()
 	mux.Handle("/rpc/", s)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

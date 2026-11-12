@@ -42,7 +42,11 @@ then:  service utf8 | iface utf8 | method utf8 | payload bytes (rest of buffer)
   endpoint + signing key via the granted service registry (§4). An undeclared
   service name is rejected before any network (capability security).
 - `iface` — versioned interface id (`"shop.catalog.v1"`); the server checks it.
-- `method` — the method name (`"list"`, `"get"`, `"login"`).
+  The host also checks it: it must equal the `iface` the manifest binds to
+  `service`, so a granted endpoint can't be reused for another interface.
+- `method` — the method name (`"list"`, `"get"`, `"login"`). It becomes one URL
+  path segment, so the host requires `[A-Za-z0-9_-]{1,64}` (no `/`, `?`, `#`,
+  `.`) and rejects anything else pre-network.
 - `payload` — request body bytes. v1 demo uses **JSON**; the wire is
   content-type-tagged so CBOR is a drop-in (`flags` bit0 = payload is CBOR).
 - `flags` bit1 = this call carries the current user session token (host attaches
@@ -137,9 +141,27 @@ services (no ambient authority).
     "cart":    { "iface": "shop.cart.v1",    "endpoint": "http://127.0.0.1:8787", "key": "ed:<server pubkey>" },
     "orders":  { "iface": "shop.orders.v1",  "endpoint": "http://127.0.0.1:8787", "key": "ed:<server pubkey>" },
     "admin":   { "iface": "shop.admin.v1",   "endpoint": "http://127.0.0.1:8787", "key": "ed:<server pubkey>" }
-  }
+  },
+  "links": ["search.local"],                 // web:// names this app may navigate to
+  "fetch": ["https://api.example.com"]       // origins plain fetch() may reach
 }
 ```
+
+Validation (the resolver refuses a manifest that breaks these): the
+`web://` name and every `links` entry are DNS-like (`[a-z0-9.-]`, no empty
+labels), so `{root}/{name}.json` can't escape the manifest root; `bundle` is a
+relative `.wasm` path without `..`, drive letters or a leading separator;
+endpoints and `fetch` entries are bare `http(s)://host[:port]` origins (no path,
+query, fragment or credentials); `iface` is `[A-Za-z0-9._-]` without `..`.
+
+**fetch policy.** `fetch` may reach only the declared origins (exact scheme,
+host and port). Redirects are not followed. A declared *name* may only connect
+to public addresses; the check runs in the connection's own resolver, so DNS
+rebinding can't swap in `127.0.0.1` or `169.254.169.254`. Loopback/LAN targets
+need an explicit IP literal or `localhost` in the manifest. Responses are capped
+at 8 MiB and each guest may have 16 requests (fetch + rpc) in flight. A bare
+`.wasm` target has no manifest; its fetch origins come from
+`GWB_DEV_FETCH_ORIGINS` (comma-separated), and it gets none by default.
 
 **Local resolver (DevX).** `renderer web://<name>` →  reads
 `./manifests/<name>.json` (dev root; overridable with `--manifest-root`). This
@@ -185,6 +207,11 @@ Authz per §3: catalog + auth.login public; cart/orders authenticated; admin adm
 
 ```
 - host: rpc_call with an UNDECLARED service is rejected pre-network (capability)
+- host: rpc_call with a declared service but another iface, or a method with
+  path characters, is rejected pre-network
+- host: fetch to an undeclared origin, a userinfo URL, or a name resolving to a
+  private address is refused (renderer/src/net.rs tests)
+- server: -dev-insecure and demo accounts are refused on non-loopback addresses
 - host: RPC_RESULT correlates to the right req_id under concurrent calls
 - server: a request with a bad/absent GWB-Sig is rejected err_class 2 (authn)
 - server: catalog.list works with NO session; admin.* denied without admin (err_class 3)

@@ -75,7 +75,7 @@ spare.
 ```powershell
 # GWB side (timings land in renderer/logs/system.log)
 scripts\build-c.cmd examples\bench-c\bench.c renderer\bench-c.wasm
-cd renderer; .\target\release\renderer.exe bench-c.wasm --script bench-test.txt
+cd renderer; .\target\release\renderer.exe bench-c.wasm --script scripts/bench-test.txt
 
 # JS side
 cd bench\js; npm i playwright; node run.mjs

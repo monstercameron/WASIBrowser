@@ -250,11 +250,10 @@ func (b *Batch) Observe(id uint32, what uint32)      { b.op(17, 0, 0, id, what, 
 func (b *Batch) Unobserve(id uint32, what uint32)    { b.op(18, 0, 0, id, what, noStr) }
 func (b *Batch) Focus(id uint32)                     { b.op(19, 0, 0, id, 0, noStr) }
 
-// Submit encodes and submits the batch, then resets it for reuse.
-func (b *Batch) Submit() uint32 {
-	if b.count == 0 {
-		return 0
-	}
+// Encode returns the GWB1 wire bytes for the ops recorded so far (header +
+// 16-byte op records + string heap) without submitting or resetting. The
+// shared conformance vectors in testdata/abi are produced from this.
+func (b *Batch) Encode() []byte {
 	heapOff := uint32(16 + len(b.ops))
 	buf := make([]byte, 0, 16+len(b.ops)+len(b.heap))
 	buf = append(buf, 'G', 'W', 'B', '1')
@@ -263,7 +262,15 @@ func (b *Batch) Submit() uint32 {
 	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(b.heap)))
 	buf = append(buf, b.ops...)
 	buf = append(buf, b.heap...)
-	status := hostSubmit(buf)
+	return buf
+}
+
+// Submit encodes and submits the batch, then resets it for reuse.
+func (b *Batch) Submit() uint32 {
+	if b.count == 0 {
+		return 0
+	}
+	status := hostSubmit(b.Encode())
 	b.ops = b.ops[:0]
 	b.heap = b.heap[:0]
 	b.count = 0
